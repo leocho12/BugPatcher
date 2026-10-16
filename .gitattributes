@@ -1,0 +1,9 @@
+* text=auto
+*.cpp text eol=crlf
+*.sln text eol=crlf
+*.vcxproj* text eol=crlf
+*.png binary
+*.gif binary
+*.aseprite binary
+*.docx binary
+*.pptx binary

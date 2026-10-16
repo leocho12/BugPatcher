@@ -1,0 +1,62 @@
+# ===== Visual Studio / MSVC =====
+.vs/
+x64/
+x86/
+Win32/
+[Dd]ebug/
+[Rr]elease/
+[Bb]in/
+[Oo]bj/
+out/
+build/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+*.ipch
+ipch/
+*.aps
+*.ncb
+
+# ===== 빌드 산출물 =====
+*.exe
+*.dll
+*.lib
+*.exp
+*.ilk
+*.pdb
+*.obj
+*.o
+*.pch
+*.idb
+*.tlog
+*.lastbuildstate
+*.log
+*.recipe
+*.iobj
+*.ipdb
+
+# ===== CMake (멀티플레이 서버/클라 분리 시) =====
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+compile_commands.json
+
+# ===== 에디터 / OS =====
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+*~
+
+# ===== Aseprite 백업 =====
+*.aseprite~
+
+# ===== 압축 파일 =====
+*.zip
+*.7z
+*.rar
