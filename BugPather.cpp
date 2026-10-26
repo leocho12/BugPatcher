@@ -42,8 +42,8 @@ void DrawStartScreen(HDC hdc, HWND hwnd) {
 }
 
 void DrawMapSelectScreen(HDC hdc, HWND hwnd) {
-	Image* mapPreview1 = new Image(L"map_grid_preview.png");
-	Image* mapPreview2 = new Image(L"map_gimmick_preview.png");
+	Image* mapPreview1 = new Image(L"Resources/Map/map_grid_preview.png");
+	Image* mapPreview2 = new Image(L"Resources/Map/map_gimmick_preview.png");
 	RECT rect;
 	GetClientRect(hwnd, &rect);
 
@@ -407,11 +407,11 @@ const char* GetWeaponName(int type) {
 Gdiplus::Image* weaponImages[5] = { nullptr };
 
 void LoadWeaponImages() {
-	weaponImages[WEAPON_SLASH] = new Image(L"slash.png");
-	weaponImages[WEAPON_CIRCLE] = new Image(L"circle.png");
-	weaponImages[WEAPON_BREATH] = new Image(L"breath.png");
-	weaponImages[WEAPON_SLOW] = new Image(L"slow.png");
-	weaponImages[WEAPON_COUNT] = new Image(L"homing.png");
+	weaponImages[WEAPON_SLASH] = new Image(L"Resources/Weapon/slash.png");
+	weaponImages[WEAPON_CIRCLE] = new Image(L"Resources/Weapon/circle.png");
+	weaponImages[WEAPON_BREATH] = new Image(L"Resources/Weapon/breath.png");
+	weaponImages[WEAPON_SLOW] = new Image(L"Resources/Weapon/slow.png");
+	weaponImages[WEAPON_COUNT] = new Image(L"Resources/Weapon/homing.png");
 }
 
 void DrawWeaponSelectionUI(HDC hdc, int screenWidth, int screenHeight) {
@@ -1747,21 +1747,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		GdiplusStartupInput gdiInput;
 		GdiplusStartup(&gdiToken, &gdiInput, NULL);
 
-		backgroundImg = new Bitmap(L"MAP.png");
-		menuBackgroundImg = new Bitmap(L"mainmenu.png");
-		playerGif.Load(L"player.gif");
-		bossGif.Load(L"boss1.gif");
-		boss2Gif.Load(L"boss2_flying.gif");
-		boss3Gif.Load(L"boss3.gif");
-		enemyNormalGif.Load(L"enemyNormal.gif");
-		enemyFastGif.Load(L"enemyFast.gif");
-		enemyTankGif.Load(L"enemyTank.gif");
-		slashGif.Load(L"weapon_slash.gif");
-		circleGif.Load(L"weapon_circle.gif");
-		breathGif.Load(L"weapon_breath.gif");
-		slowGif.Load(L"weapon_slow.gif");
-		cdGif.Load(L"CD.gif");
-		fanGif.Load(L"wind.gif");
+		backgroundImg = new Bitmap(L"Resources/Map/MAP.png");
+		menuBackgroundImg = new Bitmap(L"Resources/UI/mainmenu.png");
+		playerGif.Load(L"Resources/Character/Player.gif");
+		bossGif.Load(L"Resources/Character/Boss1.gif");
+		boss2Gif.Load(L"Resources/Character/Boss2_flying.gif");
+		boss3Gif.Load(L"Resources/Character/Boss3.gif");
+		enemyNormalGif.Load(L"Resources/Character/enemyNormal.gif");
+		enemyFastGif.Load(L"Resources/Character/enemyFast.gif");
+		enemyTankGif.Load(L"Resources/Character/enemyTank.gif");
+		slashGif.Load(L"Resources/Weapon/weapon_slash.gif");
+		circleGif.Load(L"Resources/Weapon/weapon_circle.gif");
+		breathGif.Load(L"Resources/Weapon/weapon_breath.gif");
+		slowGif.Load(L"Resources/Weapon/weapon_slow.gif");
+		cdGif.Load(L"Resources/Gimmick/CD.gif");
+		fanGif.Load(L"Resources/Gimmick/wind.gif");
 		LoadWeaponImages();
 
 		//타입, 막공시간, 쿨타임, 유지시간, 공격여부, 데미지
@@ -2198,7 +2198,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		}
 
 		if (killedBoss3) {
-			Image* endingImage = new Image(L"patched.png"); // 전역 또는 상태 관리용
+			Image* endingImage = new Image(L"Resources/UI/patched.png"); // 전역 또는 상태 관리용
 			Graphics g(memDC);
 			g.DrawImage(endingImage, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
 		}

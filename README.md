@@ -7,9 +7,9 @@
 
 - Visual Studio 2022 (툴셋 v143), Windows 10 SDK
 - `BP.sln`을 열고 `x64` 구성으로 빌드
-- 이미지 리소스(`*.png`, `*.gif`)를 **실행 작업 디렉터리** 기준 상대 경로로 로드합니다.
+- 이미지 리소스를 **실행 작업 디렉터리** 기준 `Resources/...` 상대 경로로 로드합니다.
   VS에서 F5로 실행하면 프로젝트 폴더가 작업 디렉터리라 그대로 동작하고,
-  exe를 따로 실행할 때는 같은 폴더에 리소스를 복사해야 합니다.
+  exe를 따로 실행할 때는 exe 옆에 `Resources` 폴더를 통째로 복사해야 합니다.
 
 ## 조작
 
@@ -26,7 +26,12 @@
 BugPatcher/
 ├─ BP.sln, BP.vcxproj      Visual Studio 프로젝트
 ├─ BugPather.cpp           게임 전체 소스 (단일 파일)
-├─ *.png, *.gif            게임에서 로드하는 리소스
+├─ Resources/              게임에서 로드하는 이미지 리소스
+│  ├─ Character/           플레이어, 일반 적, 보스 GIF
+│  ├─ Weapon/              무기 이펙트 GIF, 레벨업 선택 아이콘 PNG
+│  ├─ Gimmick/             기믹 맵용 CD, 바람 GIF
+│  ├─ Map/                 맵 배경, 맵 선택 미리보기
+│  └─ UI/                  메인 메뉴, 엔딩 화면
 ├─ art/                    Aseprite 원본 및 미사용 아트 리소스
 └─ docs/                   제안서 / 결과 보고서 / 발표 자료
 ```
