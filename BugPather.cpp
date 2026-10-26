@@ -32,6 +32,10 @@ const int TILE_SIZE = 32;
 Bitmap* backgroundImg = nullptr;
 // 메뉴 배경 이미지 추가
 Bitmap* menuBackgroundImg = nullptr;
+// 맵 선택 미리보기, 엔딩 이미지 (WM_CREATE에서 한 번만 로드)
+Image* mapPreviewImg1 = nullptr;
+Image* mapPreviewImg2 = nullptr;
+Image* endingImg = nullptr;
 
 void DrawStartScreen(HDC hdc, HWND hwnd) {
 	// === 메뉴 배경 이미지 출력 ===
@@ -42,8 +46,8 @@ void DrawStartScreen(HDC hdc, HWND hwnd) {
 }
 
 void DrawMapSelectScreen(HDC hdc, HWND hwnd) {
-	Image* mapPreview1 = new Image(L"Resources/Map/map_grid_preview.png");
-	Image* mapPreview2 = new Image(L"Resources/Map/map_gimmick_preview.png");
+	Image* mapPreview1 = mapPreviewImg1;
+	Image* mapPreview2 = mapPreviewImg2;
 	RECT rect;
 	GetClientRect(hwnd, &rect);
 
@@ -356,7 +360,7 @@ struct Weapon {
 struct HomingWeapon {
 	bool active = false;
 	float x, y;
-	int targetIndex = -1;  // 타겟 적의 인덱스
+	int targetId = -1;  // 타겟 적의 id (vector 인덱스는 적이 지워지면 밀리므로 id로 추적)
 	DWORD lastAttackTime = 0;
 	DWORD duration = 3000; // 3초 동안 유지
 	DWORD cooldown = 5000;
@@ -414,17 +418,33 @@ void LoadWeaponImages() {
 	weaponImages[WEAPON_COUNT] = new Image(L"Resources/Weapon/homing.png");
 }
 
-void DrawWeaponSelectionUI(HDC hdc, int screenWidth, int screenHeight) {
+// === 레벨업 카드 배치 (그리기와 클릭 판정이 같이 사용) ===
+const int CARD_BOX_WIDTH = 200;
+const int CARD_BOX_HEIGHT = 60;
+const int CARD_GAP = 40;
+const int CARD_IMG_SIZE = 100;
+
+// i번째 카드의 텍스트 박스 좌상단
+POINT GetWeaponCardOrigin(int i) {
+	int totalWidth = 3 * CARD_BOX_WIDTH + 2 * CARD_GAP;
+	int startX = (WINDOW_WIDTH - totalWidth) / 2;
+	int y = WINDOW_HEIGHT * 3 / 5 - CARD_BOX_HEIGHT / 2;
+	return { startX + i * (CARD_BOX_WIDTH + CARD_GAP), y };
+}
+
+// i번째 카드 전체 영역 (이미지 + 텍스트 박스)
+RECT GetWeaponCardRect(int i) {
+	POINT o = GetWeaponCardOrigin(i);
+	int imgY = o.y - CARD_IMG_SIZE - 20;
+	return { o.x - 5, imgY - 20, o.x + CARD_BOX_WIDTH + 5, o.y + CARD_BOX_HEIGHT + 5 };
+}
+
+void DrawWeaponSelectionUI(HDC hdc) {
 	if (!isChoosingWeapon) return;
 
-	const int boxWidth = 200;
-	const int boxHeight = 60;
-	const int gap = 40;
-	const int imgSize = 100;
-
-	int totalWidth = 3 * boxWidth + 2 * gap;
-	int startX = (screenWidth - totalWidth) / 2;
-	int y = screenHeight * 3 / 5 - boxHeight / 2;
+	const int boxWidth = CARD_BOX_WIDTH;
+	const int boxHeight = CARD_BOX_HEIGHT;
+	const int imgSize = CARD_IMG_SIZE;
 
 	HFONT hFont = CreateFont(24, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
 		DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -434,14 +454,16 @@ void DrawWeaponSelectionUI(HDC hdc, int screenWidth, int screenHeight) {
 	Graphics graphics(hdc);
 
 	for (int i = 0; i < 3; ++i) {
-		int x = startX + i * (boxWidth + gap);
+		POINT origin = GetWeaponCardOrigin(i);
+		int x = origin.x;
+		int y = origin.y;
 
 		// 이미지 위치 계산
 		int imgX = x + (boxWidth - imgSize) / 2;
 		int imgY = y - imgSize - 20;
 
 		// === 통합 외곽 박스 (이미지 + 텍스트 박스 포함) ===
-		RECT outerBox = { x - 5, imgY - 20, x + boxWidth + 5, y + boxHeight + 5 };
+		RECT outerBox = GetWeaponCardRect(i);
 		HBRUSH outerBrush = CreateSolidBrush(RGB(60, 60, 60));
 		FillRect(hdc, &outerBox, outerBrush);
 		DeleteObject(outerBrush);
@@ -478,7 +500,7 @@ void DrawWeaponSelectionUI(HDC hdc, int screenWidth, int screenHeight) {
 }
 
 void ReleaseWeaponImages() {
-	for (int i = 0; i < WEAPON_COUNT; ++i) {
+	for (int i = 0; i < _countof(weaponImages); ++i) {  // 소금총(인덱스 WEAPON_COUNT)까지 해제
 		delete weaponImages[i];
 		weaponImages[i] = nullptr;
 	}
@@ -667,6 +689,7 @@ bool isDashing3 = false;
 DWORD lastboss3AttackTime = 0;
 DWORD lastboss3DashTime = 0;
 DWORD lastboss3DashStartTime = 0;
+float dash3Dx = 0, dash3Dy = 0;  // 보스2와 별도인 보스3 돌진 방향
 const DWORD boss3AttackInterval = 2500;
 const DWORD boss3DashInterval = 4000;
 
@@ -683,6 +706,9 @@ const int bossAttackDamage = 20;
 bool killedBoss = false;
 bool killedBoss2 = false;
 bool killedBoss3 = false;
+
+// 무기 피격 판정을 보스 전체에 적용할 때 사용
+Boss* const allBosses[] = { &boss, &boss2, &boss3 };
 
 void SpawnBoss() {
 	if (boss.active) return;
@@ -714,6 +740,7 @@ enum EnemyType {
 };
 
 struct Enemy {
+	int id = 0;  // 고유 id (소금총 타겟 추적용)
 	float x, y;
 	int hp;
 	int type = ENEMY_NORMAL;
@@ -728,6 +755,7 @@ struct Enemy {
 };
 
 std::vector<Enemy> enemies;
+int nextEnemyId = 1;
 DWORD lastSpawnTime = 0;
 
 //화면 외곽에서 적 생성
@@ -735,6 +763,7 @@ void SpawnEnemy(int offsetX, int offsetY) {
 	RECT spawnZone = { 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT };
 	int edge = rand() % 4;
 	Enemy e;
+	e.id = nextEnemyId++;
 
 	switch (edge) {
 	case 0: // 위
@@ -1006,6 +1035,7 @@ int FindBestTarget() {
 
 void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 	if (isChoosingWeapon) return;
+	if (gameOver || killedBoss3) return;  // 게임 오버/엔딩 후에는 무기 포함 모든 로직 정지
 
 	switch (idEvent) {
 	case 1: { // 게임 루프 (프레임마다 실행)
@@ -1314,13 +1344,13 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 				float ty = playerPos.y - boss3.y;
 				float len = sqrtf(tx * tx + ty * ty);
 				if (len > 0.0f) {
-					dashDx = tx / len;
-					dashDy = ty / len;
+					dash3Dx = tx / len;
+					dash3Dy = ty / len;
 				}
 			}
 			if (isDashing3) {
-				boss3.x += dashDx * dashSpeed;
-				boss3.y += dashDy * dashSpeed;
+				boss3.x += dash3Dx * dashSpeed;
+				boss3.y += dash3Dy * dashSpeed;
 
 				if (GetTickCount() - lastboss3DashStartTime >= dashDuration) {
 					isDashing3 = false; // 돌진 종료
@@ -1424,6 +1454,7 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 		}
 		if (playerHP <= 0) {
 			gameOver = true;
+			InvalidateRect(hwnd, NULL, FALSE);  // 타이머가 모두 멈추므로 GAME OVER 화면을 여기서 갱신
 		}
 		if (boss.active) {
 			float dx = boss.x - playerPos.x;
@@ -1555,13 +1586,14 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 			}
 			++it;
 		}
-		if (boss.active) {
-			float dx = boss.x - playerPos.x;
-			float dy = boss.y - playerPos.y;
+		for (Boss* b : allBosses) {
+			if (!b->active || b->hp <= 0) continue;
+			float dx = b->x - playerPos.x;
+			float dy = b->y - playerPos.y;
 			float distSq = dx * dx + dy * dy;
 
 			if (distSq <= CIRCLE_RADIUS * CIRCLE_RADIUS) {
-				boss.hp -= weapons[WEAPON_CIRCLE].damage;  // 또는 데미지 수치 조정
+				b->hp -= weapons[WEAPON_CIRCLE].damage;  // 또는 데미지 수치 조정
 			}
 		}
 		break;
@@ -1602,9 +1634,10 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 		}
 
 		// 보스 대상
-		if (boss.active && boss.hp > 0) {
-			float dx = boss.x - cx;
-			float dy = boss.y - cy;
+		for (Boss* b : allBosses) {
+			if (!b->active || b->hp <= 0) continue;
+			float dx = b->x - cx;
+			float dy = b->y - cy;
 			float distSq = dx * dx + dy * dy;
 
 			float bossRadius = 64.0f;  // 128x128 보스 → 반지름 64
@@ -1616,7 +1649,7 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 				if (angleDiff > M_PI) angleDiff = 2 * M_PI - angleDiff;
 
 				if (angleDiff <= M_PI / 6) {  // 60도 범위 내
-					boss.hp -= weapons[WEAPON_BREATH].damage;
+					b->hp -= weapons[WEAPON_BREATH].damage;
 				}
 			}
 		}
@@ -1650,25 +1683,23 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 			if (idx != -1) {
 				homingWeapon.active = true;
 				homingWeapon.lastAttackTime = now;
-				homingWeapon.targetIndex = idx;
+				homingWeapon.targetId = enemies[idx].id;
 				homingWeapon.x = playerPos.x;
 				homingWeapon.y = playerPos.y;
 			}
 		}
 
 		if (homingWeapon.active) {
-			if (now - homingWeapon.lastAttackTime >= homingWeapon.duration || homingWeapon.targetIndex >= enemies.size()) {
+			auto targetIt = std::find_if(enemies.begin(), enemies.end(),
+				[](const Enemy& e) { return e.id == homingWeapon.targetId; });
+
+			// 시간 초과 또는 타겟이 다른 무기에 의해 이미 제거된 경우
+			if (now - homingWeapon.lastAttackTime >= homingWeapon.duration || targetIt == enemies.end()) {
 				homingWeapon.active = false;
 				break;
 			}
 
-			Enemy& target = enemies[homingWeapon.targetIndex];
-
-			// 적이 제거된 경우
-			if (target.hp <= 0) {
-				homingWeapon.active = false;
-				break;
-			}
+			Enemy& target = *targetIt;
 
 			float dx = target.x - homingWeapon.x;
 			float dy = target.y - homingWeapon.y;
@@ -1685,7 +1716,7 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 			if (distSq <= 20 * 20) {  // 대략적 충돌 반경
 				target.hp -= homingWeapon.damage;
 				if (target.hp <= 0) {
-					enemies.erase(enemies.begin() + homingWeapon.targetIndex);
+					enemies.erase(targetIt);
 					killCount++;
 
 				}
@@ -1763,6 +1794,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		cdGif.Load(L"Resources/Gimmick/CD.gif");
 		fanGif.Load(L"Resources/Gimmick/wind.gif");
 		LoadWeaponImages();
+		mapPreviewImg1 = new Image(L"Resources/Map/map_grid_preview.png");
+		mapPreviewImg2 = new Image(L"Resources/Map/map_gimmick_preview.png");
+		endingImg = new Image(L"Resources/UI/patched.png");
 
 		//타입, 막공시간, 쿨타임, 유지시간, 공격여부, 데미지
 		weapons[WEAPON_SLASH] = { WEAPON_SLASH, 0, 1000, 200, false, 3 };
@@ -1779,7 +1813,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		case 'D': keyRight = true; break;
 		case 'W':    keyUp = true; break;
 		case 'S':  keyDown = true; break;
-		case '1': debug = true; break;
+		case '1':
+			// 디버그 모드 토글 (키를 누르고 있을 때 반복 입력은 무시)
+			if (!(lParam & 0x40000000)) debug = !debug;
+			break;
 		}
 		if (currentState == GAME_START && wParam == VK_RETURN) {
 			currentState = GAME_MAP_SELECT;
@@ -1836,16 +1873,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			int mx = LOWORD(lParam);
 			int my = HIWORD(lParam);
 
-			int boxWidth = 200;
-			int boxHeight = 60;
-			int gap = 40;
-			int totalWidth = 3 * boxWidth + 2 * gap;
-			int startX = (WINDOW_WIDTH - totalWidth) / 2;
-			int y = WINDOW_HEIGHT / 2 - boxHeight / 2;
-
 			for (int i = 0; i < 3; ++i) {
-				int x = startX + i * (boxWidth + gap);
-				RECT r = { x, y, x + boxWidth, y + boxHeight };
+				RECT r = GetWeaponCardRect(i);  // 화면에 그려진 카드 전체 영역
 
 				if (mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom) {
 					selectedWeapon = i;
@@ -1862,6 +1891,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 						if (!isBreathEnabled) {
 							SetTimer(hwnd, 13, 100, (TIMERPROC)TimerProc);  // 브레스 무기 충돌 체크 (0.1초마다)
 							weapons[WEAPON_BREATH].damage = 5;
+							isBreathEnabled = true;
 						}
 						else {
 							weapons[WEAPON_BREATH].damage++;
@@ -1872,6 +1902,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 						if (!isCircleEnabled) {
 							SetTimer(hwnd, 12, 100, (TIMERPROC)TimerProc); // circle 타이머
 							weapons[WEAPON_CIRCLE].active = true;
+							isCircleEnabled = true;
 						}
 						else {
 							weapons[WEAPON_CIRCLE].damage++;
@@ -1882,6 +1913,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 						if (!isSlowEnabled) {
 							SetTimer(hwnd, 14, 16, (TIMERPROC)TimerProc);  // 슬로우 무기 주기 (0.1초 간격)
 							weapons[WEAPON_SLOW].active = true;
+							isSlowEnabled = true;
 						}
 						break;
 
@@ -1889,6 +1921,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 						if (!isHomingEnabled) {
 							SetTimer(hwnd, 15, 16, (TIMERPROC)TimerProc);  // 스나이퍼 무기 약 60FPS
 							homingWeapon.damage = 10;
+							isHomingEnabled = true;
 						}
 						else {
 							homingWeapon.damage++;
@@ -2159,7 +2192,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			DrawHealthBar(memDC);
 		}
 
-		DrawWeaponSelectionUI(memDC, WINDOW_WIDTH, WINDOW_HEIGHT);
+		DrawWeaponSelectionUI(memDC);
 
 		if (gameOver) {
 			// === 배경 박스 ===
@@ -2197,10 +2230,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			DeleteObject(hFont);
 		}
 
-		if (killedBoss3) {
-			Image* endingImage = new Image(L"Resources/UI/patched.png"); // 전역 또는 상태 관리용
+		if (killedBoss3 && endingImg) {
 			Graphics g(memDC);
-			g.DrawImage(endingImage, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+			g.DrawImage(endingImg, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
 		}
 
 		// 최종 출력
@@ -2223,7 +2255,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		enemyTankGif.Release();
 		cdGif.Release();
 		fanGif.Release();
+		slashGif.Release();
+		circleGif.Release();
+		breathGif.Release();
+		slowGif.Release();
 		ReleaseWeaponImages();
+		delete mapPreviewImg1;
+		delete mapPreviewImg2;
+		delete endingImg;
 		GdiplusShutdown(gdiToken);
 		SelectObject(memDC, oldBM);
 		DeleteObject(memBM);
