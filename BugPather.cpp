@@ -22,7 +22,6 @@ enum GameState {
 };
 
 GameState currentState = GAME_START;
-int selectedMap = -1;
 const int WINDOW_WIDTH = 800;
 const int WINDOW_HEIGHT = 800;
 const int MAP_WIDTH = 2400;
@@ -37,7 +36,7 @@ Image* mapPreviewImg1 = nullptr;
 Image* mapPreviewImg2 = nullptr;
 Image* endingImg = nullptr;
 
-void DrawStartScreen(HDC hdc, HWND hwnd) {
+void DrawStartScreen(HDC hdc) {
 	// === 메뉴 배경 이미지 출력 ===
 	if (menuBackgroundImg) {
 		Graphics graphics(hdc);
@@ -45,11 +44,9 @@ void DrawStartScreen(HDC hdc, HWND hwnd) {
 	}
 }
 
-void DrawMapSelectScreen(HDC hdc, HWND hwnd) {
+void DrawMapSelectScreen(HDC hdc) {
 	Image* mapPreview1 = mapPreviewImg1;
 	Image* mapPreview2 = mapPreviewImg2;
-	RECT rect;
-	GetClientRect(hwnd, &rect);
 
 	Graphics graphics(hdc);
 
@@ -73,7 +70,6 @@ void DrawMapSelectScreen(HDC hdc, HWND hwnd) {
 	const int imageSize = 125;
 	const int textPadding = 20;
 	const int textBoxHeight = 125;
-	const int textBoxPadding = 10;
 
 	int startX = 100;
 	int startY = 150;
@@ -125,12 +121,6 @@ void DrawMapSelectScreen(HDC hdc, HWND hwnd) {
 int playerLevel = 1;
 int killCount = 0;
 DWORD gameStartTime = 0;
-DWORD pauseTime = 0;
-
-struct POINTF {
-	float x;
-	float y;
-};
 
 // === GIF 애니메이션 구조체 및 전역 ===
 struct GifSprite {
@@ -190,20 +180,15 @@ struct GifSprite {
 struct CDGimmick {
 	float x, y;
 	float dx, dy;  // 이동 방향
-	bool active;
 	float radius = 64.0f;
 	int damage = 15;
-	DWORD spawnTime;
 };
 
 // === 팬 기믹 ===
 struct FanGimmick {
 	float x, y;
-	float startX, startY;
-	float endX, endY;
 	float windDx, windDy;  // 바람 방향
 	float moveDx, moveDy;
-	bool active;
 	float width = 64.0f;   // 바람 폭
 	float strength = 8.0f; // 밀림 강도
 	float moveSpeed = 4.0f; // 바람 이동 속도 
@@ -221,8 +206,6 @@ const DWORD FAN_SPAWN_INTERVAL = 8000; // 12초마다 팬 생성
 
 void SpawnCD() {
 	CDGimmick cd;
-	cd.active = true;
-	cd.spawnTime = GetTickCount();
 
 	// 랜덤하게 맵 가장자리에서 시작
 	int side = rand() % 4;
@@ -260,7 +243,6 @@ void SpawnCD() {
 
 void SpawnFan() {
 	FanGimmick fan;
-	fan.active = true;
 	fan.spawnTime = GetTickCount();
 
 	// 랜덤하게 맵 한쪽 끝에서 다른 끝으로
@@ -270,10 +252,6 @@ void SpawnFan() {
 	case 0: // 위에서 아래로
 		fan.x = (float)(rand() % MAP_WIDTH);
 		fan.y = 0.0f;
-		fan.startX = 0;
-		fan.startY = 0;
-		fan.endX = MAP_WIDTH;
-		fan.endY = 0;
 		fan.windDx = 0;
 		fan.windDy = fan.strength;
 		fan.moveDx = 0.0f;
@@ -282,10 +260,6 @@ void SpawnFan() {
 	case 1: // 아래에서 위로
 		fan.x = (float)(rand() % MAP_WIDTH);     // 맵 전체 폭에서 랜덤
 		fan.y = (float)MAP_HEIGHT;
-		fan.startX = 0;
-		fan.startY = MAP_HEIGHT;
-		fan.endX = MAP_WIDTH;
-		fan.endY = MAP_HEIGHT;
 		fan.windDx = 0;
 		fan.windDy = -fan.strength;
 		fan.moveDx = 0.0f;
@@ -294,10 +268,6 @@ void SpawnFan() {
 	case 2: // 왼쪽에서 오른쪽으로
 		fan.x = 0.0f;
 		fan.y = (float)(rand() % MAP_HEIGHT);    // 맵 전체 높이에서 랜덤
-		fan.startX = 0.0f;
-		fan.startY = fan.y;
-		fan.endX = (float)MAP_WIDTH;
-		fan.endY = fan.y;
 		fan.windDx = fan.strength;
 		fan.windDy = 0.0f;
 		fan.moveDx = fan.moveSpeed;  // 오른쪽으로 이동
@@ -306,10 +276,6 @@ void SpawnFan() {
 	case 3: // 오른쪽에서 왼쪽으로
 		fan.x = (float)MAP_WIDTH;
 		fan.y = (float)(rand() % MAP_HEIGHT);    // 맵 전체 높이에서 랜덤
-		fan.startX = (float)MAP_WIDTH;
-		fan.startY = fan.y;
-		fan.endX = 0.0f;
-		fan.endY = fan.y;
 		fan.windDx = -fan.strength;
 		fan.windDy = 0.0f;
 		fan.moveDx = -fan.moveSpeed;  // 왼쪽으로 이동
@@ -323,7 +289,7 @@ void SpawnFan() {
 // === 캐릭터 및 무기별 GIF 전역 인스턴스 ===
 GifSprite playerGif, bossGif, boss2Gif, boss3Gif;
 GifSprite enemyNormalGif, enemyFastGif, enemyTankGif;
-GifSprite slashGif, circleGif, breathGif, slowGif, homingGif;
+GifSprite slashGif, circleGif, breathGif, slowGif;
 GifSprite cdGif, fanGif;
 ULONG_PTR gdiToken;
 
@@ -385,18 +351,9 @@ const float BREATH_RADIUS = 120.0f;//breath 사이즈
 int cameraX = 0;
 int cameraY = 0;
 
-DWORD lastAttackTime = 0;          // 마지막 공격 시점
-const DWORD attackCooldown = 1000;  // 쿨타임 0.5초
-const DWORD weaponDisplayDuration = 200;  // 무기 유지 시간 0.2초
-
-DWORD now = GetTickCount();
-bool canDrawWeapon = (now - lastAttackTime >= attackCooldown);
-
 bool isChoosingWeapon = false;
 int weaponChoices[3] = { -1, -1, -1 };  // 무기 인덱스
 int selectedWeapon = -1;               // 선택된 무기 인덱스 (0,1,2)
-
-int weaponLevels[WEAPON_COUNT] = { 0 };  // 무기별 강화 레벨 저장
 
 const char* GetWeaponName(int type) {
 	switch (type) {
@@ -522,33 +479,9 @@ void ShowWeaponSelection() {
 	}
 }
 
-void DrawWeaponUpgradeUI(HDC hdc) {
-	if (!isChoosingWeapon) return;
-
-	int width = WINDOW_WIDTH;
-	int height = WINDOW_HEIGHT;
-
-	int boxWidth = 300;
-	int boxHeight = 200;
-	int x = (width - boxWidth);
-	int y = 0;
-
-	Rectangle(hdc, x, y, x + boxWidth, y + boxHeight);
-
-	// 무기 레벨 정보 표시
-	TextOut(hdc, x + 10, y + 10, L"[무기 레벨 정보]", 11);
-	for (int i = 0; i < WEAPON_COUNT; ++i) {
-		wchar_t info[64];
-		wsprintf(info, L"- %d: %d 레벨, %d damage", i, weaponLevels[i], weapons[i].damage);
-		TextOut(hdc, x + 20, y + 30 + i * 20, info, lstrlen(info));
-	}
-}
-
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
-void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime);
-void DrawGrid(HDC hdc, int offsetX, int offsetY);
 
-void CheckLevelUp(HWND hwnd) {
+void CheckLevelUp() {
 	if (playerLevel >= 15) return;
 
 	// 레벨업 필요 처치 수 = 현재 레벨 * 5
@@ -594,25 +527,6 @@ struct Boss {
 			hp = maxHp = 1200;
 			break;
 		}
-	}
-
-	void Draw(HDC hdc, int camX, int camY) {
-		if (!active) return;
-
-		int screenX = x - camX;
-		int screenY = y - camY;
-		RECT rect = { screenX - 64, screenY - 64, screenX + 64, screenY + 64 };
-
-		HBRUSH brush = CreateSolidBrush(RGB(150, 0, 200));
-		FillRect(hdc, &rect, brush);
-		DeleteObject(brush);
-
-		HPEN pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
-		HPEN oldPen = (HPEN)SelectObject(hdc, pen);
-		SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
-		Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom);
-		SelectObject(hdc, oldPen);
-		DeleteObject(pen);
 	}
 
 	void DrawHealthBar(HDC hdc, int screenWidth) {
@@ -691,7 +605,6 @@ DWORD lastboss3DashTime = 0;
 DWORD lastboss3DashStartTime = 0;
 float dash3Dx = 0, dash3Dy = 0;  // 보스2와 별도인 보스3 돌진 방향
 const DWORD boss3AttackInterval = 2500;
-const DWORD boss3DashInterval = 4000;
 
 DWORD bossAttackLastTime = 0;
 DWORD bossLastAttackTick = 0;
@@ -759,8 +672,7 @@ int nextEnemyId = 1;
 DWORD lastSpawnTime = 0;
 
 //화면 외곽에서 적 생성
-void SpawnEnemy(int offsetX, int offsetY) {
-	RECT spawnZone = { 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT };
+void SpawnEnemy() {
 	int edge = rand() % 4;
 	Enemy e;
 	e.id = nextEnemyId++;
@@ -800,14 +712,6 @@ void SpawnEnemy(int offsetX, int offsetY) {
 	}
 
 	enemies.push_back(e);
-}
-
-int GetRequiredKills(int level) {
-	return level * 5; // 예: 1레벨 -> 5마리, 2레벨 -> 10마리 ...
-}
-
-int GetPrevRequiredKills(int level) {
-	return (level - 1) * 5;
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
@@ -1040,6 +944,7 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 	switch (idEvent) {
 	case 1: { // 게임 루프 (프레임마다 실행)
 		if (showBossAlert||gameOver||killedBoss3) return;
+		DWORD now = GetTickCount();  // 이번 틱 시각 (기믹 생성, 바람 지속시간, 보스3 패턴에서 공통 사용)
 		const int speed = 4;
 
 		if (keyLeft)  playerPos.x -= speed;
@@ -1057,7 +962,6 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 
 		if (currentState == GAME_PLAYING2) {
 			// === CD 기믹 생성 ===
-			DWORD now = GetTickCount();
 			if (now - lastCDSpawnTime >= CD_SPAWN_INTERVAL) {
 				SpawnCD();
 				lastCDSpawnTime = now;
@@ -1176,12 +1080,6 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 		// 적 생성 (1초마다)
 		if (playerLevel < 15) {
 			if (GetTickCount() - lastSpawnTime > 1000) {
-				int offsetX = playerPos.x - WINDOW_WIDTH / 2;
-				int offsetY = playerPos.y - WINDOW_HEIGHT / 2;
-
-				offsetX = max(0, min(offsetX, MAP_WIDTH - WINDOW_WIDTH));
-				offsetY = max(0, min(offsetY, MAP_HEIGHT - WINDOW_HEIGHT));
-
 				// 경과 시간 (초)
 				DWORD elapsed = (GetTickCount() - gameStartTime) / 1000;
 
@@ -1190,7 +1088,7 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 				spawnCount = min(spawnCount, 10); // 최대 10마리
 
 				for (int i = 0; i < spawnCount; ++i) {
-					SpawnEnemy(offsetX, offsetY);
+					SpawnEnemy();
 				}
 
 				lastSpawnTime = GetTickCount();
@@ -1317,8 +1215,6 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 				boss3.y += dy / len * speed;
 			}
 
-			DWORD now = GetTickCount();
-
 			// 8방향 탄막
 			if (now - lastboss3AttackTime >= boss3AttackInterval) {
 				lastboss3AttackTime = now;
@@ -1435,7 +1331,7 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 			killedBoss3 = true;
 			playerHP = playerhp;
 		}
-		CheckLevelUp(hwnd);
+		CheckLevelUp();
 		InvalidateRect(hwnd, NULL, FALSE);
 		break;
 	}
@@ -1510,9 +1406,6 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 		weaponAngle = atan2f(dy, dx); // 마우스 방향 각도 (라디안)
 
 		// 무기 위치 및 폴리곤 계산
-		int centerX = playerPos.x - cameraX;
-		int centerY = playerPos.y - cameraY;
-
 		float weaponCenterX = playerPos.x + cosf(weaponAngle) * slashOffset;
 		float weaponCenterY = playerPos.y + sinf(weaponAngle) * slashOffset;
 
@@ -1756,7 +1649,6 @@ void DrawBoss3AttackEffect(HDC hdc)
 
 // 무기 타이머 활성화 상태 플래그
 bool isBreathEnabled = false;
-bool isSniperEnabled = false;
 bool isCircleEnabled = false;
 bool isSlowEnabled = false;
 bool isHomingEnabled = false;
@@ -1840,11 +1732,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			// WM_LBUTTONUP or WM_LBUTTONDOWN에서 좌표 확인
 			if (x >= 100 && x <= 700) {
 				if (y >= 150 && y <= 300) { // 첫 번째 버튼
-					selectedMap = 1;
 					currentState = GAME_PLAYING;
 				}
 				else if (y >= 340 && y <= 490) { // 두 번째 버튼
-					selectedMap = 2;
 					currentState = GAME_PLAYING2;
 				}
 				InvalidateRect(hwnd, NULL, TRUE);
@@ -1949,10 +1839,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		int offsetY = playerPos.y - WINDOW_HEIGHT / 2;
 		switch (currentState) {
 		case GAME_START:
-			DrawStartScreen(memDC, hwnd);
+			DrawStartScreen(memDC);
 			break;
 		case GAME_MAP_SELECT:
-			DrawMapSelectScreen(memDC, hwnd);
+			DrawMapSelectScreen(memDC);
 			break;
 		case GAME_LOADING:
 			SetTimer(hwnd, 1, 16, (TIMERPROC)TimerProc); // 이동 타이머
@@ -1988,30 +1878,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		int screenX = playerPos.x - offsetX;
 		int screenY = playerPos.y - offsetY;
 
-		// 플레이어 중심 좌표
-		int centerX = playerPos.x - cameraX;
-		int centerY = playerPos.y - cameraY;
-
-		// 무기 중심 좌표 (플레이어 기준 앞쪽으로 offset만큼 이동)
-		float weaponCenterX = centerX + cosf(weaponAngle) * slashOffset;
-		float weaponCenterY = centerY + sinf(weaponAngle) * slashOffset;
-
-		// 무기 꼭짓점 좌표 계산
-		POINT weaponPoints[4];
-		for (int i = 0; i < 4; i++) {
-			float x = (i < 2 ? -WEAPON_WIDTH / 2.0f : WEAPON_WIDTH / 2.0f);
-			float y = (i % 3 == 0 ? -WEAPON_HEIGHT / 2.0f : WEAPON_HEIGHT / 2.0f);
-
-			// 회전 적용
-			float rotatedX = x * cosf(weaponAngle) - y * sinf(weaponAngle);
-			float rotatedY = x * sinf(weaponAngle) + y * cosf(weaponAngle);
-
-			weaponPoints[i].x = (int)(weaponCenterX + rotatedX);
-			weaponPoints[i].y = (int)(weaponCenterY + rotatedY);
-		}
-
-		// 무기 그리기
-		DWORD now = GetTickCount();
 		// === 무기 그리기 (GIF) ===
 		for (int i = 0; i < WEAPON_COUNT; ++i) {
 			Weapon& w = weapons[i];
@@ -2061,10 +1927,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 
 		// 적 그리기
-		HBRUSH normalBrush = CreateSolidBrush(RGB(255, 0, 0));     // 빨간색 (기본)
-		HBRUSH fastBrush = CreateSolidBrush(RGB(255, 128, 0));   // 주황색 (빠른 적)
-		HBRUSH tankBrush = CreateSolidBrush(RGB(0, 128, 0));   // 노란색 (탱크형 적)
-
 		for (auto& enemy : enemies) {
 			int ex = enemy.x - cameraX;
 			int ey = enemy.y - cameraY;
@@ -2082,9 +1944,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				enemyNormalGif.Draw(graphics, ex - 16, ey - 16, 32, 32);
 			}
 		}
-		DeleteObject(normalBrush);
-		DeleteObject(fastBrush);
-		DeleteObject(tankBrush);
 
 		for (const auto& b : bossBullets) {
 			int sx = (int)(b.x - cameraX);
