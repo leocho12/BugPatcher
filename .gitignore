@@ -38,6 +38,13 @@ ipch/
 *.iobj
 *.ipdb
 
+# ===== VS 기타 생성물 =====
+*.res
+*.tlb
+*.cache
+*.dmp
+enc_temp_folder/
+
 # ===== CMake (멀티플레이 서버/클라 분리 시) =====
 CMakeFiles/
 CMakeCache.txt
@@ -52,6 +59,11 @@ desktop.ini
 .DS_Store
 *.swp
 *~
+*.tmp
+*.bak
+
+# ===== Office 임시 잠금 파일 (docs 문서를 열어 둔 채 커밋할 때 생김) =====
+~$*
 
 # ===== Aseprite 백업 =====
 *.aseprite~
