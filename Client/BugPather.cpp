@@ -4,7 +4,7 @@
 #include <cmath>
 #include <algorithm>
 #include <random>
-
+#include <objidl.h>
 #include <gdiplus.h>
 #pragma comment(lib, "gdiplus.lib")
 using namespace Gdiplus;
