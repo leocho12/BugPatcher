@@ -24,12 +24,18 @@
     <ClCompile Include="UdpClient.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
+    <ClCompile Include="NetworkClient.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="SnapshotBuffer.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
     <ClInclude Include="UdpClient.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="NetworkClient.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
   </ItemGroup>

@@ -144,11 +144,17 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Server.cpp" />
+    <ClCompile Include="Session.cpp" />
     <ClCompile Include="UdpEndpoint.cpp" />
     <ClCompile Include="World.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="EventQueue.h" />
+    <ClInclude Include="Events.h" />
+    <ClInclude Include="Server.h" />
+    <ClInclude Include="Session.h" />
     <ClInclude Include="UdpEndpoint.h" />
     <ClInclude Include="World.h" />
   </ItemGroup>

@@ -1,9 +1,10 @@
-﻿#include <WinSock2.h>
-#pragma comment(lib,"ws2_32.lib")
-int main() {
-	WSADATA wsa;
-	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return 1;
+﻿#include "Server.h"
+#pragma comment(lib, "ws2_32.lib")
 
-	WSACleanup();
+int main() {
+	Server server;
+	if (!server.Init()) return 1;
+	server.Run();
+	server.Shutdown();
 	return 0;
 }

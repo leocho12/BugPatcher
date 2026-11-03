@@ -155,10 +155,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="BugPather.cpp" />
+    <ClCompile Include="NetworkClient.cpp" />
     <ClCompile Include="SnapshotBuffer.cpp" />
     <ClCompile Include="UdpClient.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="NetworkClient.h" />
     <ClInclude Include="SnapshotBuffer.h" />
     <ClInclude Include="UdpClient.h" />
   </ItemGroup>

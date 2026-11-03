@@ -1,0 +1,6 @@
+root = true
+
+# VS가 새 파일과 저장 파일을 UTF-8(BOM)로 저장하게 한다
+[*.{h,cpp}]
+charset = utf-8-bom
+end_of_line = crlf
