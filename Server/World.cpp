@@ -11,7 +11,11 @@ void World::Init(EventQueue<RecvEvent>* rq, EventQueue<SendEvent>* sq,
 	startEvent = ev;
 	startInfo = info;
 }
-DWORD WINAPI World::ThreadMain(LPVOID) { return 0; }
+
+DWORD WINAPI World::ThreadMain(LPVOID self) {
+	static_cast<World*>(self)->Run();// CreateThread용 정적 함수는 넘겨받기만
+	return 0;
+}
 
 void World::OnInput(int playerId, const C2S_Input& pkt) {
 	if (playerId < 0 || playerId >= MAX_PLAYERS) return;
@@ -23,7 +27,10 @@ void World::OnInput(int playerId, const C2S_Input& pkt) {
 }
 
 void World::OnSelectWeapon(int,const C2S_SelectWeapon&){}
-void World::OnDisconnect(int) {}
+void World::OnDisconnect(int playerId) {
+	if (playerId < 0 || playerId >= MAX_PLAYERS)return;
+	players[playerId].active = false;
+}
 
 void World::SpawnPlayer() {
 	for (int i = 0; i < MAX_PLAYERS; ++i) {
@@ -45,5 +52,54 @@ void World::UpdatePlayers() {
 		// 맵 경계 체크
 		p.x = std::clamp(p.x, 0.0f, (float)MAP_WIDTH);
 		p.y = std::clamp(p.y, 0.0f, (float)MAP_HEIGHT);
+	}
+}
+
+void World::Run() {
+	WaitForSingleObject(startEvent, INFINITE);// 게임 시작 신호를 기다림
+	if (!running)return;// 시작전에 서버가 꺼지면 종료
+
+	SpawnPlayer();
+
+	ULONGLONG nextTick = GetTickCount64();
+	while (running) {
+		ULONGLONG now = GetTickCount64();
+		if (now < nextTick) {
+			Sleep((DWORD)(nextTick - now));// 다음 틱까지 잠
+			continue;
+		}
+		nextTick += TICK_MS;// now가 아니라 예정 시각에 더해야 오차가 쌓이지 않음
+
+		ProcessRecvEvents();
+		Update(TICK_MS);
+	}
+}
+
+void World::Update(uint32_t dtMs) {
+	nowMs += dtMs;
+	UpdatePlayers();
+}
+
+void World::ProcessRecvEvents() {
+	recvQ->SwapOut(recvBuf);// 쓰레드가 쌓아논 이벤트 가져옴
+
+	for (const RecvEvent& e : recvBuf) {// 이밴트 하나씩 꺼내기
+		if (e.kind == RecvKind::Disconnect) {
+			OnDisconnect(e.playerId);
+			continue;
+		}
+		if (e.data.size() < sizeof(PacketHeader))continue;// 너무 작은 패킷은 무시
+		
+		const PacketHeader* h = reinterpret_cast<const PacketHeader*>(e.data.data());// 패킷 헤더를 꺼내서 타입 확인
+		switch (h->type) {
+		case C2S_INPUT:// 키 입력 패킷인 경우
+			if (e.data.size() == sizeof(C2S_Input))
+				OnInput(e.playerId, *reinterpret_cast<const C2S_Input*>(h));
+			break;
+		case C2S_SELECT_WEAPON:// 무기 선택 패킷인 경우
+			if (e.data.size() == sizeof(C2S_SelectWeapon))
+				OnSelectWeapon(e.playerId, *reinterpret_cast<const C2S_SelectWeapon*>(h));
+			break;
+		}
 	}
 }

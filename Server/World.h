@@ -1,6 +1,8 @@
 ﻿#pragma once
 #include <WinSock2.h>
 #include <Windows.h>
+#include <atomic>
+#include <vector>
 #include "EventQueue.h"
 #include "Events.h"
 struct C2S_Input;
@@ -26,10 +28,17 @@ public:
 	void OnDisconnect(int playerId);
 	void SpawnPlayer();// 게임 시작 시 위치, HP 초기화
 	void UpdatePlayers();// 한 틱만큼 이동
+	void Update(uint32_t dtMs);// 한 틱 시뮬레이션
+	void Stop(){ running = false; }// 서버 종료시 메인이 호출
 private:
 	EventQueue<RecvEvent>* recvQ = nullptr;		
 	EventQueue<SendEvent>* sendQ = nullptr;		
 	HANDLE startEvent = nullptr;				
 	const GameStartInfo* startInfo = nullptr;
 	ServerPlayer players[MAX_PLAYERS];
+	void Run();
+	void ProcessRecvEvents();
+	uint64_t nowMs = 0;// 게임 시간. 틱마다 TICK_MS씩 누적
+	std::atomic<bool> running{ true };
+	std::vector<RecvEvent> recvBuf;
 };
