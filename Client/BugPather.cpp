@@ -6,12 +6,16 @@
 #include <random>
 #include <objidl.h>
 #include <gdiplus.h>
+#include "UdpClient.h"
 #pragma comment(lib, "gdiplus.lib")
 using namespace Gdiplus;
 
 #define M_PI 3.14159265358979323846
 
 bool debug = false;
+
+UdpClient g_udp;	// 로그인 성공(S2C_LOGIN_OK) 후 Start, S2C_UDP_OK 수신 시 OnUdpOk
+const UINT_PTR TIMER_NET_INPUT = 20;	// 33ms마다 C2S_INPUT 송신
 
 enum GameState {
 	GAME_START,
@@ -937,7 +941,18 @@ int FindBestTarget() {
 	return bestIndex;
 }
 
+void SendNetInput(HWND hwnd) {
+	if (GetForegroundWindow() != hwnd) return;	// 한 PC에서 클라 2개를 띄울 때 둘이 같이 움직이지 않게
+	uint8_t keys = 0;
+	if (GetAsyncKeyState('W') & 0x8000) keys |= 1 << 0;	// KEY_W
+	if (GetAsyncKeyState('A') & 0x8000) keys |= 1 << 1;	// KEY_A
+	if (GetAsyncKeyState('S') & 0x8000) keys |= 1 << 2;	// KEY_S
+	if (GetAsyncKeyState('D') & 0x8000) keys |= 1 << 3;	// KEY_D
+	g_udp.SendInput(keys, weaponAngle);	// 등록 전이면 UdpClient가 알아서 무시
+}
+
 void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
+	if (idEvent == TIMER_NET_INPUT) { SendNetInput(hwnd); return; }	// 무기 선택 중에도 입력은 계속 보냄
 	if (isChoosingWeapon) return;
 	if (gameOver || killedBoss3) return;  // 게임 오버/엔딩 후에는 무기 포함 모든 로직 정지
 
@@ -1848,6 +1863,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			SetTimer(hwnd, 1, 16, (TIMERPROC)TimerProc); // 이동 타이머
 			SetTimer(hwnd, 2, 100, (TIMERPROC)TimerProc); // 충돌 타이머
 			SetTimer(hwnd, 11, 16, (TIMERPROC)TimerProc); // slash 타이머
+			SetTimer(hwnd, TIMER_NET_INPUT, 33, (TIMERPROC)TimerProc); // 네트워크 입력 송신 (TICK_MS)
 			break;
 		case GAME_PLAYING:
 			// 배경 그리기
@@ -2102,6 +2118,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	}
 
 	case WM_DESTROY:
+		g_udp.Stop();	// UDP 수신 스레드 종료
 		// === GIF 메모리 해제 및 GDI+ 종료 ===
 		if (backgroundImg) delete backgroundImg;
 		if (menuBackgroundImg) delete menuBackgroundImg;

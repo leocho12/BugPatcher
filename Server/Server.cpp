@@ -190,7 +190,18 @@ void Server::OnMapSelect(Session&, const C2S_MapSelect&) {}
 void Server::SendLoginOk(Session&) {}
 void Server::SendUdpOk(Session&) {}
 void Server::CheckGameStart() {}
-void Server::FlushSendQueue() {}
+void Server::FlushSendQueue() {
+	sendQ.SwapOut(sendBuf);
+	for (const SendEvent& e : sendBuf) {
+		for (int i = 0; i < MAX_PLAYERS; ++i) {
+			if (e.target != TARGET_ALL && e.target != i) continue;
+			if (e.udp)
+				udp.SendTo(i, e.data.data(), (int)e.data.size());	// 등록 안 된 플레이어는 SendTo가 무시
+			else if (sessions[i].sock != INVALID_SOCKET)
+				sessions[i].AppendSend(e.data.data(), (int)e.data.size());	// 다음 WSAPoll에서 POLLWRNORM으로 보냄
+		}
+	}
+}
 void Server::Disconnect(Session& s) {
 	if (s.sock == INVALID_SOCKET) return;
 	printf("접속 끊김: P%d\n", s.playerId);

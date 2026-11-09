@@ -29,6 +29,7 @@ public:
 	void SpawnPlayer();// 게임 시작 시 위치, HP 초기화
 	void UpdatePlayers();// 한 틱만큼 이동
 	void Update(uint32_t dtMs);// 한 틱 시뮬레이션
+	void SendSnapshot();// 현재 상태를 S2C_SNAPSHOT으로 만들어 송신 큐에 넣음
 	void Stop(){ running = false; }// 서버 종료시 메인이 호출
 private:
 	EventQueue<RecvEvent>* recvQ = nullptr;		
@@ -39,6 +40,7 @@ private:
 	void Run();
 	void ProcessRecvEvents();
 	uint64_t nowMs = 0;// 게임 시간. 틱마다 TICK_MS씩 누적
+	uint32_t tick = 0;// 스냅샷 번호
 	std::atomic<bool> running{ true };
 	std::vector<RecvEvent> recvBuf;
 };

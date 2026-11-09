@@ -1,5 +1,6 @@
 ﻿#include "World.h"
 #include <algorithm>
+#include <cmath>
 
 constexpr float PLAYER_SPEED = 250.0f;// px/초
 constexpr float PLAYER_STEP = PLAYER_SPEED * TICK_MS / 1000.0f; // 한 틱당 이동량
@@ -77,7 +78,45 @@ void World::Run() {
 
 void World::Update(uint32_t dtMs) {
 	nowMs += dtMs;
+	++tick;
 	UpdatePlayers();
+	SendSnapshot();
+}
+
+void World::SendSnapshot() {
+	std::vector<char> buf(sizeof(S2C_SnapshotHead));// 헤더 자리만 먼저 잡음
+	auto put = [&](const void* p, size_t n) {
+		const char* c = static_cast<const char*>(p);
+		buf.insert(buf.end(), c, c + n);
+	};
+
+	PlayerState ps[MAX_PLAYERS]{};
+	for (int i = 0; i < MAX_PLAYERS; ++i) {
+		const ServerPlayer& p = players[i];
+		ps[i].id = (uint8_t)i;
+		ps[i].x = (int16_t)lroundf(p.x);
+		ps[i].y = (int16_t)lroundf(p.y);
+		ps[i].hp = (int16_t)p.hp;
+		ps[i].level = 1;
+		ps[i].aimAngle = p.aimAngle;
+	}
+	put(ps, sizeof(ps));
+
+	// Protocol.h 순서: 0번 조각만 보스, 탄막, 기믹 수가 적 수 앞에 온다. 지금은 전부 0
+	uint8_t bossCount = 0;		put(&bossCount, sizeof(bossCount));
+	uint16_t bulletCount = 0;	put(&bulletCount, sizeof(bulletCount));
+	uint8_t gimmickCount = 0;	put(&gimmickCount, sizeof(gimmickCount));
+	uint16_t enemyCount = 0;	put(&enemyCount, sizeof(enemyCount));
+
+	// insert 중에 버퍼가 다시 할당될 수 있으므로 헤더는 마지막에 채움
+	S2C_SnapshotHead* h = reinterpret_cast<S2C_SnapshotHead*>(buf.data());
+	h->header.size = (uint16_t)buf.size();
+	h->header.type = S2C_SNAPSHOT;
+	h->tick = tick;
+	h->fragIndex = 0;
+	h->fragCount = 1;
+
+	sendQ->Push(SendEvent{ TARGET_ALL, true, std::move(buf) });
 }
 
 void World::ProcessRecvEvents() {

@@ -33,7 +33,8 @@ private:
 	World world;
 
 	EventQueue<RecvEvent> recvQ;	
-	EventQueue<SendEvent> sendQ;	
+	EventQueue<SendEvent> sendQ;
+	std::vector<SendEvent> sendBuf;	// FlushSendQueue에서 송신 큐를 꺼내 담는 곳
 	HANDLE gameStartEvent = nullptr;	
 	HANDLE worldThread = nullptr;
 	GameStartInfo startInfo{};
