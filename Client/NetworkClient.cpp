@@ -11,7 +11,7 @@ bool NetworkClient::Connect(const char* serverIp, HWND wnd) {
 	sockaddr_in addr{};
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(SERVER_TCP_PORT);
-	if (inet_pton(AF_INET, serverIp, &addr.sin_addr) != 1) {	// IP 형식이 틀림
+	if (inet_pton(AF_INET, serverIp, &addr.sin_addr) != 1) {	
 		Close();
 		return false;
 	}
@@ -47,7 +47,7 @@ void NetworkClient::Close() {
 void NetworkClient::SendLogin(const char* nickname) {
 	C2S_Login pkt{};
 	InitPacket(pkt, C2S_LOGIN);
-	strncpy_s(pkt.nickname, nickname, _TRUNCATE);	// 최대 15글자 + 널 문자
+	strncpy_s(pkt.nickname, nickname, _TRUNCATE);	
 	Send(&pkt, sizeof(pkt));
 }
 
@@ -69,9 +69,9 @@ DWORD WINAPI NetworkClient::RecvThread(LPVOID self) {
 	NetworkClient* nc = static_cast<NetworkClient*>(self);
 	char buf[4096];
 	while (true) {
-		int len = recv(nc->sock, buf, sizeof(buf), 0);	// 블로킹: 데이터가 올 때까지 이 스레드만 멈춘다
-		if (len <= 0) break;				// 0: 서버가 끊음, 오류: 끊김 또는 Close
-		if (!nc->OnRecv(buf, len)) break;	// 잘못된 패킷
+		int len = recv(nc->sock, buf, sizeof(buf), 0);	// 데이터가 올 때까지 이 스레드만 멈춘다
+		if (len <= 0) break;				
+		if (!nc->OnRecv(buf, len)) break;	// 오류 처리
 	}
 	PostMessage(nc->hwnd, WM_NET_DISCONNECTED, 0, 0);
 	return 0;
