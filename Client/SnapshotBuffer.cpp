@@ -1,4 +1,4 @@
-#include "SnapshotBuffer.h"
+﻿#include "SnapshotBuffer.h"
 #include <cstring>
 #include "Protocol.h"
 
@@ -94,3 +94,5 @@ bool SnapshotBuffer::CopyTo(Snapshot& out) {
 	LeaveCriticalSection(&cs);
 	return has;
 }
+
+SnapshotBuffer g_snapshot;	// UDP 수신 스레드가 쓰고 WM_PAINT가 읽는 전역 버퍼

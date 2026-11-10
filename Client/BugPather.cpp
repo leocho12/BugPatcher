@@ -7,6 +7,7 @@
 #include <objidl.h>
 #include <gdiplus.h>
 #include "UdpClient.h"
+#include "NetworkClient.h"
 #pragma comment(lib, "gdiplus.lib")
 using namespace Gdiplus;
 
@@ -16,6 +17,14 @@ bool debug = false;
 
 UdpClient g_udp;	// 로그인 성공(S2C_LOGIN_OK) 후 Start, S2C_UDP_OK 수신 시 OnUdpOk
 const UINT_PTR TIMER_NET_INPUT = 20;	// 33ms마다 C2S_INPUT 송신
+
+NetworkClient g_net;		// TCP. 접속 화면에서 Enter로 Connect
+class SnapshotBuffer;
+extern SnapshotBuffer g_snapshot;	// SnapshotBuffer.cpp에 있음
+char g_serverIp[32] = "127.0.0.1";	// 접속 화면에서 입력
+bool g_connected = false;
+int g_myId = -1;					// LOGIN_OK로 받은 playerId
+const wchar_t* g_netStatus = L"서버 IP 입력 후 Enter";
 
 enum GameState {
 	GAME_START,
@@ -46,6 +55,22 @@ void DrawStartScreen(HDC hdc) {
 		Graphics graphics(hdc);
 		graphics.DrawImage(menuBackgroundImg, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
 	}
+
+	// 접속 화면 서버 IP와 상태
+	SetBkMode(hdc, TRANSPARENT);
+	SetTextColor(hdc, RGB(255, 255, 255));
+	HFONT font = CreateFont(28, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+		DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+	HFONT oldFont = (HFONT)SelectObject(hdc, font);
+
+	wchar_t line[64];
+	swprintf_s(line, L"서버 IP: %S", g_serverIp);	
+	TextOutW(hdc, 250, 650, line, lstrlenW(line));
+	TextOutW(hdc, 250, 690, g_netStatus, lstrlenW(g_netStatus));
+
+	SelectObject(hdc, oldFont);
+	DeleteObject(font);
 }
 
 void DrawMapSelectScreen(HDC hdc) {
@@ -719,6 +744,10 @@ void SpawnEnemy() {
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
+	WSADATA wsa;
+	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) 
+		return 1;
+
 	WNDCLASS wc = { 0 };
 	wc.lpfnWndProc = WndProc;
 	wc.hInstance = hInstance;
@@ -742,6 +771,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
+	WSACleanup();
 	return 0;
 }
 
@@ -1722,13 +1752,61 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		case 'S':  keyDown = true; break;
 		case '1':
 			// 디버그 모드 토글 (키를 누르고 있을 때 반복 입력은 무시)
-			if (!(lParam & 0x40000000)) debug = !debug;
+			if (currentState != GAME_START && !(lParam & 0x40000000)) debug = !debug;
 			break;
 		}
-		if (currentState == GAME_START && wParam == VK_RETURN) {
-			currentState = GAME_MAP_SELECT;
-			InvalidateRect(hwnd, NULL, TRUE);
+		if (currentState == GAME_START && wParam == VK_RETURN && !g_connected) {
+			if (g_net.Connect(g_serverIp, hwnd)) {
+				g_connected = true;
+				g_net.SendLogin("player");
+				g_netStatus = L"접속 성공, 로그인 중...";
+			}
+			else {
+				g_netStatus = L"접속 실패: IP와 서버 실행 여부 확인";
+			}
+			InvalidateRect(hwnd, NULL, FALSE);
 		}
+		break;
+	case WM_CHAR:	// 접속 화면 IP 입력: 숫자, 점, 백스페이스
+		if (currentState == GAME_START && !g_connected) {
+			size_t len = strlen(g_serverIp);
+			if (wParam == VK_BACK) {
+				if (len > 0) g_serverIp[len - 1] = '\0';
+			}
+			else if ((wParam >= '0' && wParam <= '9') || wParam == '.') {
+				if (len < sizeof(g_serverIp) - 1) {
+					g_serverIp[len] = (char)wParam;
+					g_serverIp[len + 1] = '\0';
+				}
+			}
+			InvalidateRect(hwnd, NULL, FALSE);
+		}
+		break;
+
+	case WM_NET_LOGIN_OK:	// TCP 수신 스레드가 보냄
+		g_myId = (int)wParam;
+		if (g_udp.Start(g_serverIp, (uint8_t)wParam, (uint32_t)lParam, &g_snapshot))
+			g_netStatus = L"로그인 성공, UDP 등록 중...";
+		else
+			g_netStatus = L"UDP 시작 실패";
+		InvalidateRect(hwnd, NULL, FALSE);
+		break;
+
+	case WM_NET_UDP_OK:
+		g_udp.OnUdpOk();
+		g_netStatus = L"UDP 등록 완료";
+		currentState = GAME_MAP_SELECT;		
+		InvalidateRect(hwnd, NULL, TRUE);
+		break;
+
+	case WM_NET_DISCONNECTED:
+		g_net.Close();
+		g_udp.Stop();
+		g_connected = false;
+		g_myId = -1;
+		g_netStatus = L"서버와 연결이 끊겼습니다";
+		currentState = GAME_START;
+		InvalidateRect(hwnd, NULL, TRUE);
 		break;
 
 	case WM_KEYUP:
@@ -2118,6 +2196,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	}
 
 	case WM_DESTROY:
+		g_net.Close();	// TCP 수신 스레드 종료
 		g_udp.Stop();	// UDP 수신 스레드 종료
 		// === GIF 메모리 해제 및 GDI+ 종료 ===
 		if (backgroundImg) delete backgroundImg;

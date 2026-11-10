@@ -1,6 +1,9 @@
 ﻿#include "Server.h"
 #include <cstdio>
 #include <WS2tcpip.h>
+#include <random>
+
+static std::mt19937 rng{ std::random_device{}() }; //랜덤 token 생성
 
 constexpr int POLL_TIMEOUT_MS = 5;
 
@@ -146,7 +149,25 @@ void Server::Shutdown() {
 }
 
 void Server::ProcessPacket(Session& s, const PacketHeader* pkt) {
-	printf("P%d 패킷 수신: type=%d size=%d\n", s.playerId, pkt->type, pkt->size);
+	switch (pkt->type) {
+	case C2S_LOGIN:
+		if (pkt->size == sizeof(C2S_Login))
+			OnLogin(s, *reinterpret_cast<const C2S_Login*>(pkt));
+		break;
+	case C2S_MAP_SELECT:
+		if (pkt->size == sizeof(C2S_MapSelect))
+			OnMapSelect(s, *reinterpret_cast<const C2S_MapSelect*>(pkt));
+		break;
+	case C2S_SELECT_WEAPON:		// 게임 패킷: 바이트를 복사해서 월드로
+		if (gameStarted && pkt->size == sizeof(C2S_SelectWeapon)) {
+			const char* p = reinterpret_cast<const char*>(pkt);
+			recvQ.Push(RecvEvent{ RecvKind::Packet, (uint8_t)s.playerId, std::vector<char>(p, p + pkt->size) });
+		}
+		break;
+	default:
+		printf("P%d 알 수 없는 패킷: type=%d\n", s.playerId, pkt->type);
+		break;
+	}
 }
 
 void Server::OnAccept() {
@@ -185,11 +206,45 @@ void Server::OnAccept() {
 		printf("접속: P%d %s:%d\n", slot->playerId, ip, ntohs(clientAddr.sin_port));
 	}
 }
-void Server::OnLogin(Session&, const C2S_Login&) {}
-void Server::OnMapSelect(Session&, const C2S_MapSelect&) {}
-void Server::SendLoginOk(Session&) {}
-void Server::SendUdpOk(Session&) {}
-void Server::CheckGameStart() {}
+void Server::OnLogin(Session& s, const C2S_Login& pkt) {
+	if (s.loggedIn) return; //중복 로그인 방지
+
+	memcpy(s.nickname, pkt.nickname, NICKNAME_LEN);
+	s.nickname[NICKNAME_LEN - 1] = '\0';	// 복사
+
+	// token 0은 UdpEndpoint에서 로그인 안 함이라는 뜻이라 피한다
+	do { s.token = rng(); } while (s.token == 0);
+	s.loggedIn = true;
+
+	udp.SetToken(s.playerId, s.token);	// 이 token으로 온 UDP_HELLO만 등록된다
+	SendLoginOk(s);
+	printf("로그인: P%d %s\n", s.playerId, s.nickname);
+}
+void Server::OnMapSelect(Session& s, const C2S_MapSelect&) {}
+void Server::SendLoginOk(Session& s) {
+	S2C_LoginOk pkt{};
+	InitPacket(pkt, S2C_LOGIN_OK);
+	pkt.playerId = (uint8_t)s.playerId;
+	pkt.token = s.token;
+	s.AppendSend(&pkt, sizeof(pkt));	// 실제 send는 다음 루프의 POLLWRNORM에서
+}
+void Server::SendUdpOk(Session& s) {
+	S2C_UdpOk pkt{};
+	InitPacket(pkt, S2C_UDP_OK);
+	s.AppendSend(&pkt, sizeof(pkt));
+}
+
+void Server::CheckGameStart() {
+	// UDP 주소 등록이 끝난 세션에 UDP OK를 한 번만 보낸다
+	for (Session& s : sessions) {
+		if (s.loggedIn && !s.udpOkSent && udp.IsRegistered(s.playerId)) {
+			SendUdpOk(s);
+			s.udpOkSent = true;
+			printf("UDP_OK 전송: P%d\n", s.playerId);
+		}
+	}
+	// 11/11 작업
+}
 void Server::FlushSendQueue() {
 	sendQ.SwapOut(sendBuf);
 	for (const SendEvent& e : sendBuf) {
@@ -206,6 +261,7 @@ void Server::Disconnect(Session& s) {
 	if (s.sock == INVALID_SOCKET) return;
 	printf("접속 끊김: P%d\n", s.playerId);
 	closesocket(s.sock);
+	udp.Unregister(s.playerId);
 	if (gameStarted)
 		recvQ.Push(RecvEvent{ RecvKind::Disconnect, (uint8_t)s.playerId, {} });
 	s.Reset();

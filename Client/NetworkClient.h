@@ -3,15 +3,17 @@
 #include <Windows.h>
 #include <cstdint>
 #include <vector>
-#include "Protocol.h"
 
+struct PacketHeader;
 
-constexpr UINT WM_NET_PACKET = WM_APP + 1;
-constexpr UINT WM_NET_DISCONNECTED = WM_APP + 2;
+// TCP 수신 스레드 -> 메인 스레드 (PostMessage)
+constexpr UINT WM_NET_LOGIN_OK = WM_APP + 1;		
+constexpr UINT WM_NET_UDP_OK = WM_APP + 2;
+constexpr UINT WM_NET_DISCONNECTED = WM_APP + 3;
 
 class NetworkClient {
 public:
-	bool Connect(const char* serverIp, HWND hwnd);	// TCP connect + 수신 스레드 시작
+	bool Connect(const char* serverIp, HWND hwnd);	
 	void Close();
 
 	void SendLogin(const char* nickname);
@@ -20,11 +22,12 @@ public:
 
 private:
 	static DWORD WINAPI RecvThread(LPVOID self);
-	bool Send(const void* data, int len);			// 다 보낼 때까지 send 반복
-	void HandlePacket(const PacketHeader* pkt);		// 완성된 패킷 -> PostMessage
+	bool OnRecv(const char* data, int len);			// 수신 버퍼에 붙이고 완성된 패킷마다 HandlePacket
+	bool Send(const void* data, int len);			
+	void HandlePacket(const PacketHeader* pkt);		// 패킷 -> PostMessage
 
 	SOCKET sock = INVALID_SOCKET;
 	HWND hwnd = nullptr;
 	HANDLE recvThread = nullptr;
-	std::vector<char> recvBuf;
+	std::vector<char> recvBuf;		// 수신 스레드 전용
 };
