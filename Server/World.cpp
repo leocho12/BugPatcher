@@ -5,6 +5,13 @@
 constexpr float PLAYER_SPEED = 250.0f;// px/초
 constexpr float PLAYER_STEP = PLAYER_SPEED * TICK_MS / 1000.0f; // 한 틱당 이동량
 
+constexpr float ENEMY_SPEED = 62.5f;// px/초 (원본 16ms당 1px)
+constexpr float ENEMY_FAST_SPEED = 125.0f;// px/초 (원본 16ms당 2px)
+constexpr uint32_t SPAWN_INTERVAL_MS = 1000;// 적 생성 주기
+constexpr int SPAWN_MAX_PER_WAVE = 10;// 한 번에 만드는 최대 수
+constexpr int SPAWN_MARGIN = 32;// 화면 바깥으로 얼마나 떨어져서 나오는지
+constexpr size_t MAX_ENEMIES = 500;// 스냅샷 크기와 서버 부하 보호용 상한
+
 void World::Init(EventQueue<RecvEvent>* rq, EventQueue<SendEvent>* sq,
 	HANDLE ev, const GameStartInfo* info) {
 	recvQ = rq;
@@ -40,6 +47,10 @@ void World::SpawnPlayer() {
 		players[i].x = MAP_WIDTH / 2.0f + (i == 0 ? -50.0f : 50.0f);// 겹치지 않게 맵 중앙의 좌우에서 스폰
 		players[i].y = MAP_HEIGHT / 2.0f;
 	}
+	// 이전 판의 적이 남지 않게 초기화
+	enemies.clear();
+	nextEnemyId = 1;
+	lastSpawnMs = nowMs;
 }
 
 void World::UpdatePlayers() {
@@ -53,6 +64,94 @@ void World::UpdatePlayers() {
 		// 맵 경계 체크
 		p.x = std::clamp(p.x, 0.0f, (float)MAP_WIDTH);
 		p.y = std::clamp(p.y, 0.0f, (float)MAP_HEIGHT);
+	}
+}
+
+void World::SpawnEnemiesPerTick() {
+	if (nowMs - lastSpawnMs < SPAWN_INTERVAL_MS)return;// 1초가 안 지났으면 이번 틱은 0마리
+	lastSpawnMs = nowMs;
+
+	int count = 1 + (int)(nowMs / 1000 / 10);// 10초마다 1마리씩 늘어남
+	count = (std::min)(count, SPAWN_MAX_PER_WAVE);
+	for (int i = 0; i < count && enemies.size() < MAX_ENEMIES; ++i)
+		SpawnEnemy();
+}
+
+void World::SpawnEnemy() {
+	// 살아 있는 플레이어 중 한 명을 골라 그 화면 바깥에서 생성
+	int alive[MAX_PLAYERS];
+	int n = 0;
+	for (int i = 0; i < MAX_PLAYERS; ++i)
+		if (players[i].active && players[i].hp > 0)alive[n++] = i;
+	if (n == 0)return;
+	const ServerPlayer& p = players[alive[rng() % n]];
+
+	// 그 플레이어 화면의 왼쪽 위 좌표 (클라 카메라처럼 맵 밖으로 나가지 않게 자름)
+	float camX = std::clamp(p.x - VIEW_WIDTH / 2.0f, 0.0f, (float)(MAP_WIDTH - VIEW_WIDTH));
+	float camY = std::clamp(p.y - VIEW_HEIGHT / 2.0f, 0.0f, (float)(MAP_HEIGHT - VIEW_HEIGHT));
+
+	ServerEnemy e;
+	e.id = nextEnemyId++;
+	if (nextEnemyId == 0)nextEnemyId = 1;// 65535 다음에 0을 건너뜀
+
+	switch (rng() % 4) {
+	case 0:// 위
+		e.x = camX + rng() % VIEW_WIDTH;
+		e.y = camY - SPAWN_MARGIN;
+		break;
+	case 1:// 아래
+		e.x = camX + rng() % VIEW_WIDTH;
+		e.y = camY + VIEW_HEIGHT + SPAWN_MARGIN;
+		break;
+	case 2:// 왼쪽
+		e.x = camX - SPAWN_MARGIN;
+		e.y = camY + rng() % VIEW_HEIGHT;
+		break;
+	case 3:// 오른쪽
+		e.x = camX + VIEW_WIDTH + SPAWN_MARGIN;
+		e.y = camY + rng() % VIEW_HEIGHT;
+		break;
+	}
+
+	// 원본과 같은 확률: 빠른 적 20%, 나머지 중 40%가 탱크(전체의 32%), 그 외 일반
+	if (rng() % 100 < 20) {
+		e.type = ENEMY_FAST;
+		e.hp = 10;
+	}
+	else if (rng() % 100 < 40) {
+		e.type = ENEMY_TANK;
+		e.hp = 20;
+	}
+	else {
+		e.type = ENEMY_NORMAL;
+		e.hp = 10;
+	}
+
+	enemies.push_back(e);
+}
+
+const ServerPlayer* World::PickTarget(const ServerEnemy&) const {
+	// 임시: 살아 있는 첫 플레이어. 11/17에 가까운 플레이어로 교체
+	for (const ServerPlayer& p : players)
+		if (p.active && p.hp > 0)return &p;
+	return nullptr;
+}
+
+void World::UpdateEnemies() {
+	for (ServerEnemy& e : enemies) {
+		const ServerPlayer* t = PickTarget(e);
+		if (!t)continue;// 쫓아갈 플레이어가 없으면 멈춤
+		float dx = t->x - e.x;
+		float dy = t->y - e.y;
+		float len = sqrtf(dx * dx + dy * dy);
+		if (len <= 0.0f)continue;
+
+		float speed = (e.type == ENEMY_FAST) ? ENEMY_FAST_SPEED : ENEMY_SPEED;
+		if (nowMs < e.slowUntil)speed *= 0.5f;// 슬로우 상태
+		float step = speed * TICK_MS / 1000.0f;// 한 틱당 이동량
+		if (step > len)step = len;// 플레이어를 지나쳐서 앞뒤로 떨리지 않게
+		e.x += dx / len * step;
+		e.y += dy / len * step;
 	}
 }
 
@@ -80,6 +179,8 @@ void World::Update(uint32_t dtMs) {
 	nowMs += dtMs;
 	++tick;
 	UpdatePlayers();
+	SpawnEnemiesPerTick();
+	UpdateEnemies();
 	SendSnapshot();
 }
 
