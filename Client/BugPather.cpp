@@ -25,6 +25,7 @@ char g_serverIp[32] = "127.0.0.1";	// 접속 화면에서 입력
 bool g_connected = false;
 int g_myId = -1;					// LOGIN_OK로 받은 playerId
 const wchar_t* g_netStatus = L"서버 IP 입력 후 Enter";
+bool g_autoMove = false;// F2로 켜고 끔. 켜면 포커스와 상관없이 네모를 그리며 이동 입력을 보냄
 
 enum GameState {
 	GAME_START,
@@ -972,6 +973,11 @@ int FindBestTarget() {
 }
 
 void SendNetInput(HWND hwnd) {
+	if (g_autoMove) {
+		static const uint8_t pat[4] = { 1 << 3,1 << 2,1 << 1,1 << 0 };
+		g_udp.SendInput(pat[(GetTickCount() / 2000) % 4], weaponAngle);
+		return;
+	}
 	if (GetForegroundWindow() != hwnd) return;	// 한 PC에서 클라 2개를 띄울 때 둘이 같이 움직이지 않게
 	uint8_t keys = 0;
 	if (GetAsyncKeyState('W') & 0x8000) keys |= 1 << 0;	// KEY_W
@@ -1750,6 +1756,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		case 'D': keyRight = true; break;
 		case 'W':    keyUp = true; break;
 		case 'S':  keyDown = true; break;
+		case VK_F2:
+			if (!(lParam & 0x40000000))g_autoMove = !g_autoMove;// 키 반복 입력무시
+			break;
 		case '1':
 			// 디버그 모드 토글 (키를 누르고 있을 때 반복 입력은 무시)
 			if (currentState != GAME_START && !(lParam & 0x40000000)) debug = !debug;
@@ -2224,6 +2233,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		DeleteDC(memDC);
 		PostQuitMessage(0);
 		return 0;
+
 	}
 
 	return DefWindowProc(hwnd, msg, wParam, lParam);

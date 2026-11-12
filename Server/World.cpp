@@ -160,6 +160,7 @@ void World::Run() {
 	if (!running)return;// 시작전에 서버가 꺼지면 종료
 
 	SpawnPlayer();
+	BroadcastGameStart();// 시작 위치를 정한 직후에 클라에 알림
 
 	ULONGLONG nextTick = GetTickCount64();
 	while (running) {
@@ -218,6 +219,17 @@ void World::SendSnapshot() {
 	h->fragCount = 1;
 
 	sendQ->Push(SendEvent{ TARGET_ALL, true, std::move(buf) });
+}
+
+void World::BroadcastGameStart() {
+	S2C_GameStart pkt{};
+	InitPacket(pkt, S2C_GAME_START);
+	pkt.mapId = startInfo->mapId;
+	for (int i = 0;i < MAX_PLAYERS;++i) {
+		pkt.startX[i] = (int16_t)lroundf(players[i].x);
+		pkt.startY[i] = (int16_t)lroundf(players[i].y);
+	}
+	sendQ->Push(SendEvent{ TARGET_ALL,false,ToBytes(pkt) });// false=TCP
 }
 
 void World::ProcessRecvEvents() {
