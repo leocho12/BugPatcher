@@ -116,5 +116,12 @@ void NetworkClient::HandlePacket(const PacketHeader* pkt) {
 	case S2C_UDP_OK:
 		PostMessage(hwnd, WM_NET_UDP_OK, 0, 0);
 		break;
+	case S2C_GAME_START:
+		if (pkt->size == sizeof(S2C_GameStart)) {
+			const S2C_GameStart* p = reinterpret_cast<const S2C_GameStart*>(pkt);
+			PostMessage(hwnd, WM_NET_GAME_START, p->mapId, 0);
+		}
+		break;
 	}
+
 }

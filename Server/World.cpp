@@ -160,7 +160,7 @@ void World::Run() {
 	if (!running)return;// 시작전에 서버가 꺼지면 종료
 
 	SpawnPlayer();
-	BroadcastGameStart();// 시작 위치를 정한 직후에 클라에 알림
+BroadcastGameStart();// 시작 위치를 정한 직후에 클라에 알림
 
 	ULONGLONG nextTick = GetTickCount64();
 	while (running) {

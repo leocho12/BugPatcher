@@ -8,6 +8,8 @@
 #include <gdiplus.h>
 #include "UdpClient.h"
 #include "NetworkClient.h"
+#include "NetView.h"
+#include "resource.h"
 #pragma comment(lib, "gdiplus.lib")
 using namespace Gdiplus;
 
@@ -15,16 +17,19 @@ using namespace Gdiplus;
 
 bool debug = false;
 
-UdpClient g_udp;	// 로그인 성공(S2C_LOGIN_OK) 후 Start, S2C_UDP_OK 수신 시 OnUdpOk
-const UINT_PTR TIMER_NET_INPUT = 20;	// 33ms마다 C2S_INPUT 송신
+UdpClient g_udp;							// 로그인 성공(S2C_LOGIN_OK) 후 Start, S2C_UDP_OK 수신 시 OnUdpOk
+const UINT_PTR TIMER_NET_INPUT = 20;		// 33ms마다 C2S_INPUT 송신
 
-NetworkClient g_net;		// TCP. 접속 화면에서 Enter로 Connect
+NetworkClient g_net;						// TCP. 접속 화면에서 Enter로 Connect
 class SnapshotBuffer;
-extern SnapshotBuffer g_snapshot;	// SnapshotBuffer.cpp에 있음
-char g_serverIp[32] = "127.0.0.1";	// 접속 화면에서 입력
+extern SnapshotBuffer g_snapshot;			// SnapshotBuffer.cpp에 있음
+char g_serverIp[32] = "127.0.0.1";			// 접속 대화상자에서 입력
+char g_nickname[16] = "";					// 접속 대화상자에서 입력 (Protocol.h NICKNAME_LEN)
 bool g_connected = false;
-int g_myId = -1;					// LOGIN_OK로 받은 playerId
 const wchar_t* g_netStatus = L"서버 IP 입력 후 Enter";
+int g_myId = -1;
+bool g_mapSent = false;
+const UINT_PTR TIMER_NET_RENDER = 21;
 bool g_autoMove = false;// F2로 켜고 끔. 켜면 포커스와 상관없이 네모를 그리며 이동 입력을 보냄
 
 enum GameState {
@@ -65,13 +70,49 @@ void DrawStartScreen(HDC hdc) {
 		DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 	HFONT oldFont = (HFONT)SelectObject(hdc, font);
 
-	wchar_t line[64];
-	swprintf_s(line, L"서버 IP: %S", g_serverIp);	
-	TextOutW(hdc, 250, 650, line, lstrlenW(line));
 	TextOutW(hdc, 250, 690, g_netStatus, lstrlenW(g_netStatus));
 
 	SelectObject(hdc, oldFont);
 	DeleteObject(font);
+}
+
+
+// IP·닉네임을 받아 connect와 로그인 패킷 전송까지 한다. 성공하면 IDOK로 닫힌다
+INT_PTR CALLBACK ConnectDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
+	switch (msg) {
+	case WM_INITDIALOG:
+		SetDlgItemTextA(hDlg, IDC_EDIT_IP, g_serverIp);
+		SetDlgItemTextA(hDlg, IDC_EDIT_NICK, g_nickname);
+		SendDlgItemMessage(hDlg, IDC_EDIT_NICK, EM_LIMITTEXT, sizeof(g_nickname) - 1, 0);
+		return TRUE;
+
+	case WM_COMMAND:
+		switch (LOWORD(wParam)) {
+		case IDOK:
+			GetDlgItemTextA(hDlg, IDC_EDIT_IP, g_serverIp, sizeof(g_serverIp));
+			GetDlgItemTextA(hDlg, IDC_EDIT_NICK, g_nickname, sizeof(g_nickname));
+			if (g_nickname[0] == '\0') {
+				SetDlgItemTextW(hDlg, IDC_STATIC_MSG, L"닉네임을 입력하세요");
+				return TRUE;
+			}
+			if (!g_net.Connect(g_serverIp, GetParent(hDlg))) {	// 메시지는 메인 창으로 받는다
+				SetDlgItemTextW(hDlg, IDC_STATIC_MSG, L"접속 실패: IP와 서버 실행 여부 확인");
+				return TRUE;
+			}
+			// 로그인 응답이 대화상자가 닫히기 전에 올 수 있으니 상태를 먼저 바꾼다
+			g_connected = true;
+			g_netStatus = L"접속 성공, 로그인 중...";
+			g_net.SendLogin(g_nickname);
+			EndDialog(hDlg, IDOK);
+			return TRUE;
+
+		case IDCANCEL:
+			EndDialog(hDlg, IDCANCEL);
+			return TRUE;
+		}
+		break;
+	}
+	return FALSE;
 }
 
 void DrawMapSelectScreen(HDC hdc) {
@@ -144,6 +185,7 @@ void DrawMapSelectScreen(HDC hdc) {
 	// 정리
 	DeleteObject(textBrush);
 	DeleteObject(btnBrush);
+	TextOutW(hdc, 100, 720, g_netStatus, lstrlenW(g_netStatus));
 	SelectObject(hdc, oldFont);
 	DeleteObject(font);
 }
@@ -990,6 +1032,7 @@ void SendNetInput(HWND hwnd) {
 
 void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 	if (idEvent == TIMER_NET_INPUT) { SendNetInput(hwnd); return; }	// 무기 선택 중에도 입력은 계속 보냄
+	if (idEvent == TIMER_NET_RENDER) { InvalidateRect(hwnd, NULL, FALSE); return; }
 	if (isChoosingWeapon) return;
 	if (gameOver || killedBoss3) return;  // 게임 오버/엔딩 후에는 무기 포함 모든 로직 정지
 
@@ -1766,29 +1809,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			break;
 		}
 		if (currentState == GAME_START && wParam == VK_RETURN && !g_connected) {
-			if (g_net.Connect(g_serverIp, hwnd)) {
-				g_connected = true;
-				g_net.SendLogin("player");
-				g_netStatus = L"접속 성공, 로그인 중...";
-			}
-			else {
-				g_netStatus = L"접속 실패: IP와 서버 실행 여부 확인";
-			}
-			InvalidateRect(hwnd, NULL, FALSE);
-		}
-		break;
-	case WM_CHAR:	// 접속 화면 IP 입력: 숫자, 점, 백스페이스
-		if (currentState == GAME_START && !g_connected) {
-			size_t len = strlen(g_serverIp);
-			if (wParam == VK_BACK) {
-				if (len > 0) g_serverIp[len - 1] = '\0';
-			}
-			else if ((wParam >= '0' && wParam <= '9') || wParam == '.') {
-				if (len < sizeof(g_serverIp) - 1) {
-					g_serverIp[len] = (char)wParam;
-					g_serverIp[len + 1] = '\0';
-				}
-			}
+			HINSTANCE hInst = (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE);
+			DialogBox(hInst, MAKEINTRESOURCE(IDD_CONNECT), hwnd, ConnectDlgProc);	// 접속과 로그인은 대화상자가 한다
 			InvalidateRect(hwnd, NULL, FALSE);
 		}
 		break;
@@ -1804,16 +1826,28 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 	case WM_NET_UDP_OK:
 		g_udp.OnUdpOk();
-		g_netStatus = L"UDP 등록 완료";
-		currentState = GAME_MAP_SELECT;		
+		g_netStatus = (g_myId == 0) ? L"맵을 선택하세요" : L"1P가 맵을 고르는 중...";
+		currentState = GAME_MAP_SELECT;
 		InvalidateRect(hwnd, NULL, TRUE);
 		break;
+
+	case WM_NET_GAME_START:
+		currentState = (wParam == 0) ? GAME_PLAYING : GAME_PLAYING2;
+		gameStartTime = GetTickCount();
+		SetTimer(hwnd, TIMER_NET_INPUT, 33, (TIMERPROC)TimerProc);
+		SetTimer(hwnd, TIMER_NET_RENDER, 16, (TIMERPROC)TimerProc);
+		InvalidateRect(hwnd, NULL, TRUE);
+		break;
+
 
 	case WM_NET_DISCONNECTED:
 		g_net.Close();
 		g_udp.Stop();
 		g_connected = false;
 		g_myId = -1;
+		g_mapSent = false;
+		KillTimer(hwnd, TIMER_NET_INPUT);
+		KillTimer(hwnd, TIMER_NET_RENDER);
 		g_netStatus = L"서버와 연결이 끊겼습니다";
 		currentState = GAME_START;
 		InvalidateRect(hwnd, NULL, TRUE);
@@ -1846,19 +1880,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		}
 		break;
 	case WM_LBUTTONDOWN:
-		if (currentState == GAME_MAP_SELECT) {
-			gameStartTime = GetTickCount();
+		if (currentState == GAME_MAP_SELECT && g_myId == 0 && !g_mapSent) {	// 맵은 1P만 고른다
 			int x = LOWORD(lParam);
 			int y = HIWORD(lParam);
 
 			if (x >= 100 && x <= 400) {
-				if (y >= 150 && y <= 300) {
-					currentState = GAME_LOADING;
+				int mapId = -1;
+				if (y >= 150 && y <= 300) mapId = 0;		// 격자 맵
+				else if (y >= 340 && y <= 490) mapId = 1;	// 기믹 맵
+				if (mapId >= 0) {
+					g_net.SendMapSelect((uint8_t)mapId);
+					g_mapSent = true;
+					g_netStatus = L"맵 선택 완료, 다른 플레이어를 기다리는 중...";
+					InvalidateRect(hwnd, NULL, FALSE);
 				}
-				else if (y >= 340 && y <= 490) {
-					currentState = GAME_LOADING;
-				}
-				InvalidateRect(hwnd, NULL, TRUE);
 			}
 		}
 
@@ -1937,7 +1972,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	case WM_PAINT: {
 		PAINTSTRUCT ps;
 		HDC hdc = BeginPaint(hwnd, &ps);
-		// 카메라의 기본 위치는 플레이어 중심
+		// 서버 스냅샷의 내 위치로 전역(playerPos, playerHP)을 덮어쓰고 카메라를 맞춘다
+		NetPlayerView netPlayers[NET_MAX_PLAYERS];
+		bool hasNet = (currentState == GAME_PLAYING || currentState == GAME_PLAYING2)
+			&& g_myId >= 0 && NetGetPlayers(netPlayers);
+		if (hasNet) {
+			playerPos.x = netPlayers[g_myId].x;
+			playerPos.y = netPlayers[g_myId].y;
+			playerHP = netPlayers[g_myId].hp;
+			UpdateCamera();
+		}
 		int offsetX = playerPos.x - WINDOW_WIDTH / 2;
 		int offsetY = playerPos.y - WINDOW_HEIGHT / 2;
 		switch (currentState) {
@@ -2084,6 +2128,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			boss3Gif.NextFrame();
 			boss3Gif.Draw(graphics, bx - 64, by - 64, 128, 128);
 			boss3.DrawHealthBar(memDC, WINDOW_WIDTH);
+		}
+
+		// 상대 플레이어 그리기
+		if (hasNet) {
+			int other = 1 - g_myId;
+			int ox = netPlayers[other].x - cameraX;
+			int oy = netPlayers[other].y - cameraY;
+			Graphics graphics(memDC);
+			playerGif.Draw(graphics, ox - 16, oy - 16, 32, 32);	
+
+			SetBkMode(memDC, TRANSPARENT);
+			SetTextColor(memDC, RGB(255, 255, 0));
+			const wchar_t* label = (other == 0) ? L"1P" : L"2P";
+			TextOutW(memDC, ox - 8, oy - 36, label, lstrlenW(label));
 		}
 
 		// 플레이어 그리기

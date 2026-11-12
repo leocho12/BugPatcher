@@ -1,0 +1,16 @@
+#include <windows.h>
+#include "resource.h"
+
+IDD_CONNECT DIALOGEX 0, 0, 200, 100
+STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "BUG PATCHER - Connect"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT           "Server IP", IDC_STATIC, 10, 12, 50, 10
+    EDITTEXT        IDC_EDIT_IP, 65, 10, 120, 14, ES_AUTOHSCROLL
+    LTEXT           "Nickname", IDC_STATIC, 10, 32, 50, 10
+    EDITTEXT        IDC_EDIT_NICK, 65, 30, 120, 14, ES_AUTOHSCROLL
+    LTEXT           "", IDC_STATIC_MSG, 10, 52, 180, 10
+    DEFPUSHBUTTON   "Connect", IDOK, 40, 72, 55, 16
+    PUSHBUTTON      "Cancel", IDCANCEL, 105, 72, 55, 16
+END
