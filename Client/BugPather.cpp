@@ -978,12 +978,13 @@ void SendNetInput(HWND hwnd) {
 		g_udp.SendInput(pat[(GetTickCount() / 2000) % 4], weaponAngle);
 		return;
 	}
-	if (GetForegroundWindow() != hwnd) return;	// 한 PC에서 클라 2개를 띄울 때 둘이 같이 움직이지 않게
 	uint8_t keys = 0;
-	if (GetAsyncKeyState('W') & 0x8000) keys |= 1 << 0;	// KEY_W
-	if (GetAsyncKeyState('A') & 0x8000) keys |= 1 << 1;	// KEY_A
-	if (GetAsyncKeyState('S') & 0x8000) keys |= 1 << 2;	// KEY_S
-	if (GetAsyncKeyState('D') & 0x8000) keys |= 1 << 3;	// KEY_D
+	if (GetForegroundWindow() == hwnd) {	// 포커스가 없으면 키를 안 누른 것으로 보냄
+		if (GetAsyncKeyState('W') & 0x8000) keys |= 1 << 0;	// KEY_W
+		if (GetAsyncKeyState('A') & 0x8000) keys |= 1 << 1;	// KEY_A
+		if (GetAsyncKeyState('S') & 0x8000) keys |= 1 << 2;	// KEY_S
+		if (GetAsyncKeyState('D') & 0x8000) keys |= 1 << 3;	// KEY_D
+	}
 	g_udp.SendInput(keys, weaponAngle);	// 등록 전이면 UdpClient가 알아서 무시
 }
 
