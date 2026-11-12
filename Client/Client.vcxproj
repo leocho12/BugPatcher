@@ -163,8 +163,12 @@
   <ItemGroup>
     <ClInclude Include="NetView.h" />
     <ClInclude Include="NetworkClient.h" />
+    <ClInclude Include="resource.h" />
     <ClInclude Include="SnapshotBuffer.h" />
     <ClInclude Include="UdpClient.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Client.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

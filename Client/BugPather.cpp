@@ -9,6 +9,7 @@
 #include "UdpClient.h"
 #include "NetworkClient.h"
 #include "NetView.h"
+#include "resource.h"
 #pragma comment(lib, "gdiplus.lib")
 using namespace Gdiplus;
 
@@ -22,12 +23,14 @@ const UINT_PTR TIMER_NET_INPUT = 20;		// 33ms마다 C2S_INPUT 송신
 NetworkClient g_net;						// TCP. 접속 화면에서 Enter로 Connect
 class SnapshotBuffer;
 extern SnapshotBuffer g_snapshot;			// SnapshotBuffer.cpp에 있음
-char g_serverIp[32] = "127.0.0.1";			// 접속 화면에서 입력
+char g_serverIp[32] = "127.0.0.1";			// 접속 대화상자에서 입력
+char g_nickname[16] = "";					// 접속 대화상자에서 입력 (Protocol.h NICKNAME_LEN)
 bool g_connected = false;
+const wchar_t* g_netStatus = L"Enter를 눌러 접속";
 int g_myId = -1;							// LOGIN_OK로 받은 playerId
-const wchar_t* g_netStatus = L"서버 IP 입력 후 Enter";
 bool g_mapSent = false;						// 1P가 맵 선택을 보냈는지
 const UINT_PTR TIMER_NET_RENDER = 21;		// 16ms마다 화면 갱신 (스냅샷 그리기)
+
 
 enum GameState {
 	GAME_START,
@@ -67,13 +70,49 @@ void DrawStartScreen(HDC hdc) {
 		DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 	HFONT oldFont = (HFONT)SelectObject(hdc, font);
 
-	wchar_t line[64];
-	swprintf_s(line, L"서버 IP: %S", g_serverIp);	
-	TextOutW(hdc, 250, 650, line, lstrlenW(line));
 	TextOutW(hdc, 250, 690, g_netStatus, lstrlenW(g_netStatus));
 
 	SelectObject(hdc, oldFont);
 	DeleteObject(font);
+}
+
+
+// IP·닉네임을 받아 connect와 로그인 패킷 전송까지 한다. 성공하면 IDOK로 닫힌다
+INT_PTR CALLBACK ConnectDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
+	switch (msg) {
+	case WM_INITDIALOG:
+		SetDlgItemTextA(hDlg, IDC_EDIT_IP, g_serverIp);
+		SetDlgItemTextA(hDlg, IDC_EDIT_NICK, g_nickname);
+		SendDlgItemMessage(hDlg, IDC_EDIT_NICK, EM_LIMITTEXT, sizeof(g_nickname) - 1, 0);
+		return TRUE;
+
+	case WM_COMMAND:
+		switch (LOWORD(wParam)) {
+		case IDOK:
+			GetDlgItemTextA(hDlg, IDC_EDIT_IP, g_serverIp, sizeof(g_serverIp));
+			GetDlgItemTextA(hDlg, IDC_EDIT_NICK, g_nickname, sizeof(g_nickname));
+			if (g_nickname[0] == '\0') {
+				SetDlgItemTextW(hDlg, IDC_STATIC_MSG, L"닉네임을 입력하세요");
+				return TRUE;
+			}
+			if (!g_net.Connect(g_serverIp, GetParent(hDlg))) {	// 메시지는 메인 창으로 받는다
+				SetDlgItemTextW(hDlg, IDC_STATIC_MSG, L"접속 실패: IP와 서버 실행 여부 확인");
+				return TRUE;
+			}
+			// 로그인 응답이 대화상자가 닫히기 전에 올 수 있으니 상태를 먼저 바꾼다
+			g_connected = true;
+			g_netStatus = L"접속 성공, 로그인 중...";
+			g_net.SendLogin(g_nickname);
+			EndDialog(hDlg, IDOK);
+			return TRUE;
+
+		case IDCANCEL:
+			EndDialog(hDlg, IDCANCEL);
+			return TRUE;
+		}
+		break;
+	}
+	return FALSE;
 }
 
 void DrawMapSelectScreen(HDC hdc) {
@@ -1761,29 +1800,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			break;
 		}
 		if (currentState == GAME_START && wParam == VK_RETURN && !g_connected) {
-			if (g_net.Connect(g_serverIp, hwnd)) {
-				g_connected = true;
-				g_net.SendLogin("player");
-				g_netStatus = L"접속 성공, 로그인 중...";
-			}
-			else {
-				g_netStatus = L"접속 실패: IP와 서버 실행 여부 확인";
-			}
-			InvalidateRect(hwnd, NULL, FALSE);
-		}
-		break;
-	case WM_CHAR:	// 접속 화면 IP 입력: 숫자, 점, 백스페이스
-		if (currentState == GAME_START && !g_connected) {
-			size_t len = strlen(g_serverIp);
-			if (wParam == VK_BACK) {
-				if (len > 0) g_serverIp[len - 1] = '\0';
-			}
-			else if ((wParam >= '0' && wParam <= '9') || wParam == '.') {
-				if (len < sizeof(g_serverIp) - 1) {
-					g_serverIp[len] = (char)wParam;
-					g_serverIp[len + 1] = '\0';
-				}
-			}
+			HINSTANCE hInst = (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE);
+			DialogBox(hInst, MAKEINTRESOURCE(IDD_CONNECT), hwnd, ConnectDlgProc);	// 접속과 로그인은 대화상자가 한다
 			InvalidateRect(hwnd, NULL, FALSE);
 		}
 		break;
