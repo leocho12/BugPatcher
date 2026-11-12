@@ -42,6 +42,7 @@ public:
 	void UpdateEnemies();// 적을 한 틱만큼 이동
 	void Update(uint32_t dtMs);// 한 틱 시뮬레이션
 	void SendSnapshot();// 현재 상태를 S2C_SNAPSHOT으로 만들어 송신 큐에 넣음
+	void BroadcastGameStart();// 시작 위치를 정한 뒤 S2C_GAME_START를 두 클라에 보냄
 	void Stop(){ running = false; }// 서버 종료시 메인이 호출
 private:
 	EventQueue<RecvEvent>* recvQ = nullptr;		

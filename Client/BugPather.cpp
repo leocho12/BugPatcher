@@ -8,6 +8,7 @@
 #include <gdiplus.h>
 #include "UdpClient.h"
 #include "NetworkClient.h"
+#include "NetView.h"
 #pragma comment(lib, "gdiplus.lib")
 using namespace Gdiplus;
 
@@ -15,16 +16,18 @@ using namespace Gdiplus;
 
 bool debug = false;
 
-UdpClient g_udp;	// 로그인 성공(S2C_LOGIN_OK) 후 Start, S2C_UDP_OK 수신 시 OnUdpOk
-const UINT_PTR TIMER_NET_INPUT = 20;	// 33ms마다 C2S_INPUT 송신
+UdpClient g_udp;							// 로그인 성공(S2C_LOGIN_OK) 후 Start, S2C_UDP_OK 수신 시 OnUdpOk
+const UINT_PTR TIMER_NET_INPUT = 20;		// 33ms마다 C2S_INPUT 송신
 
-NetworkClient g_net;		// TCP. 접속 화면에서 Enter로 Connect
+NetworkClient g_net;						// TCP. 접속 화면에서 Enter로 Connect
 class SnapshotBuffer;
-extern SnapshotBuffer g_snapshot;	// SnapshotBuffer.cpp에 있음
-char g_serverIp[32] = "127.0.0.1";	// 접속 화면에서 입력
+extern SnapshotBuffer g_snapshot;			// SnapshotBuffer.cpp에 있음
+char g_serverIp[32] = "127.0.0.1";			// 접속 화면에서 입력
 bool g_connected = false;
-int g_myId = -1;					// LOGIN_OK로 받은 playerId
+int g_myId = -1;							// LOGIN_OK로 받은 playerId
 const wchar_t* g_netStatus = L"서버 IP 입력 후 Enter";
+bool g_mapSent = false;						// 1P가 맵 선택을 보냈는지
+const UINT_PTR TIMER_NET_RENDER = 21;		// 16ms마다 화면 갱신 (스냅샷 그리기)
 
 enum GameState {
 	GAME_START,
@@ -143,6 +146,7 @@ void DrawMapSelectScreen(HDC hdc) {
 	// 정리
 	DeleteObject(textBrush);
 	DeleteObject(btnBrush);
+	TextOutW(hdc, 100, 720, g_netStatus, lstrlenW(g_netStatus));
 	SelectObject(hdc, oldFont);
 	DeleteObject(font);
 }
@@ -983,6 +987,7 @@ void SendNetInput(HWND hwnd) {
 
 void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
 	if (idEvent == TIMER_NET_INPUT) { SendNetInput(hwnd); return; }	// 무기 선택 중에도 입력은 계속 보냄
+	if (idEvent == TIMER_NET_RENDER) { InvalidateRect(hwnd, NULL, FALSE); return; }
 	if (isChoosingWeapon) return;
 	if (gameOver || killedBoss3) return;  // 게임 오버/엔딩 후에는 무기 포함 모든 로직 정지
 
@@ -1794,16 +1799,28 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 	case WM_NET_UDP_OK:
 		g_udp.OnUdpOk();
-		g_netStatus = L"UDP 등록 완료";
-		currentState = GAME_MAP_SELECT;		
+		g_netStatus = (g_myId == 0) ? L"맵을 선택하세요" : L"1P가 맵을 고르는 중...";
+		currentState = GAME_MAP_SELECT;
 		InvalidateRect(hwnd, NULL, TRUE);
 		break;
+
+	case WM_NET_GAME_START:
+		currentState = (wParam == 0) ? GAME_PLAYING : GAME_PLAYING2;
+		gameStartTime = GetTickCount();
+		SetTimer(hwnd, TIMER_NET_INPUT, 33, (TIMERPROC)TimerProc);
+		SetTimer(hwnd, TIMER_NET_RENDER, 16, (TIMERPROC)TimerProc);
+		InvalidateRect(hwnd, NULL, TRUE);
+		break;
+
 
 	case WM_NET_DISCONNECTED:
 		g_net.Close();
 		g_udp.Stop();
 		g_connected = false;
 		g_myId = -1;
+		g_mapSent = false;
+		KillTimer(hwnd, TIMER_NET_INPUT);
+		KillTimer(hwnd, TIMER_NET_RENDER);
 		g_netStatus = L"서버와 연결이 끊겼습니다";
 		currentState = GAME_START;
 		InvalidateRect(hwnd, NULL, TRUE);
@@ -1836,19 +1853,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		}
 		break;
 	case WM_LBUTTONDOWN:
-		if (currentState == GAME_MAP_SELECT) {
-			gameStartTime = GetTickCount();
+		if (currentState == GAME_MAP_SELECT && g_myId == 0 && !g_mapSent) {	// 맵은 1P만 고른다
 			int x = LOWORD(lParam);
 			int y = HIWORD(lParam);
 
 			if (x >= 100 && x <= 400) {
-				if (y >= 150 && y <= 300) {
-					currentState = GAME_LOADING;
+				int mapId = -1;
+				if (y >= 150 && y <= 300) mapId = 0;		// 격자 맵
+				else if (y >= 340 && y <= 490) mapId = 1;	// 기믹 맵
+				if (mapId >= 0) {
+					g_net.SendMapSelect((uint8_t)mapId);
+					g_mapSent = true;
+					g_netStatus = L"맵 선택 완료, 다른 플레이어를 기다리는 중...";
+					InvalidateRect(hwnd, NULL, FALSE);
 				}
-				else if (y >= 340 && y <= 490) {
-					currentState = GAME_LOADING;
-				}
-				InvalidateRect(hwnd, NULL, TRUE);
 			}
 		}
 
@@ -1927,7 +1945,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	case WM_PAINT: {
 		PAINTSTRUCT ps;
 		HDC hdc = BeginPaint(hwnd, &ps);
-		// 카메라의 기본 위치는 플레이어 중심
+		// 서버 스냅샷의 내 위치로 전역(playerPos, playerHP)을 덮어쓰고 카메라를 맞춘다
+		NetPlayerView netPlayers[NET_MAX_PLAYERS];
+		bool hasNet = (currentState == GAME_PLAYING || currentState == GAME_PLAYING2)
+			&& g_myId >= 0 && NetGetPlayers(netPlayers);
+		if (hasNet) {
+			playerPos.x = netPlayers[g_myId].x;
+			playerPos.y = netPlayers[g_myId].y;
+			playerHP = netPlayers[g_myId].hp;
+			UpdateCamera();
+		}
 		int offsetX = playerPos.x - WINDOW_WIDTH / 2;
 		int offsetY = playerPos.y - WINDOW_HEIGHT / 2;
 		switch (currentState) {
@@ -2074,6 +2101,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			boss3Gif.NextFrame();
 			boss3Gif.Draw(graphics, bx - 64, by - 64, 128, 128);
 			boss3.DrawHealthBar(memDC, WINDOW_WIDTH);
+		}
+
+		// 상대 플레이어 그리기
+		if (hasNet) {
+			int other = 1 - g_myId;
+			int ox = netPlayers[other].x - cameraX;
+			int oy = netPlayers[other].y - cameraY;
+			Graphics graphics(memDC);
+			playerGif.Draw(graphics, ox - 16, oy - 16, 32, 32);	
+
+			SetBkMode(memDC, TRANSPARENT);
+			SetTextColor(memDC, RGB(255, 255, 0));
+			const wchar_t* label = (other == 0) ? L"1P" : L"2P";
+			TextOutW(memDC, ox - 8, oy - 36, label, lstrlenW(label));
 		}
 
 		// 플레이어 그리기

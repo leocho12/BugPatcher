@@ -10,6 +10,7 @@ struct PacketHeader;
 constexpr UINT WM_NET_LOGIN_OK = WM_APP + 1;		
 constexpr UINT WM_NET_UDP_OK = WM_APP + 2;
 constexpr UINT WM_NET_DISCONNECTED = WM_APP + 3;
+constexpr UINT WM_NET_GAME_START = WM_APP + 4;
 
 class NetworkClient {
 public:

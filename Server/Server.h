@@ -39,4 +39,5 @@ private:
 	HANDLE worldThread = nullptr;
 	GameStartInfo startInfo{};
 	bool gameStarted = false;
+	bool mapSelected = false;		
 };

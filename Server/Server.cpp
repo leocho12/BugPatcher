@@ -220,7 +220,13 @@ void Server::OnLogin(Session& s, const C2S_Login& pkt) {
 	SendLoginOk(s);
 	printf("로그인: P%d %s\n", s.playerId, s.nickname);
 }
-void Server::OnMapSelect(Session& s, const C2S_MapSelect&) {}
+void Server::OnMapSelect(Session& s, const C2S_MapSelect& pkt) {
+	if (gameStarted || !s.loggedIn || s.playerId != 0) return;	// 맵은 1P만 고른다
+	if (pkt.mapId > 1) return;		// 0: 격자 맵, 1: 기믹 맵
+	startInfo.mapId = pkt.mapId;
+	mapSelected = true;
+	printf("맵 선택: %d\n", pkt.mapId);
+}
 void Server::SendLoginOk(Session& s) {
 	S2C_LoginOk pkt{};
 	InitPacket(pkt, S2C_LOGIN_OK);
@@ -243,13 +249,23 @@ void Server::CheckGameStart() {
 			printf("UDP_OK 전송: P%d\n", s.playerId);
 		}
 	}
-	// 11/11 작업
+	if (gameStarted || !mapSelected) return;
+	for (const Session& s : sessions) {
+		if (!s.loggedIn || !s.udpOkSent) return;	// 2명 모두 로그인, UDP 등록이 끝나야 시작
+	}
+	for (int i = 0; i < MAX_PLAYERS; ++i)
+		memcpy(startInfo.nickname[i], sessions[i].nickname, NICKNAME_LEN);
+	gameStarted = true;
+	SetEvent(gameStartEvent);	// 월드 스레드를 깨운다.
+	printf("게임 시작: map %d\n", startInfo.mapId);
 }
+
 void Server::FlushSendQueue() {
 	sendQ.SwapOut(sendBuf);
 	for (const SendEvent& e : sendBuf) {
 		for (int i = 0; i < MAX_PLAYERS; ++i) {
-			if (e.target != TARGET_ALL && e.target != i) continue;
+			if (e.target != TARGET_ALL && e.target != i)
+				continue;
 			if (e.udp)
 				udp.SendTo(i, e.data.data(), (int)e.data.size());	// 등록 안 된 플레이어는 SendTo가 무시
 			else if (sessions[i].sock != INVALID_SOCKET)
@@ -262,6 +278,8 @@ void Server::Disconnect(Session& s) {
 	printf("접속 끊김: P%d\n", s.playerId);
 	closesocket(s.sock);
 	udp.Unregister(s.playerId);
+	if (!gameStarted && s.playerId == 0) 
+		mapSelected = false;
 	if (gameStarted)
 		recvQ.Push(RecvEvent{ RecvKind::Disconnect, (uint8_t)s.playerId, {} });
 	s.Reset();
