@@ -551,6 +551,35 @@ void ShowWeaponSelection() {
 	}
 }
 
+constexpr int MIN_CLIENT_SIZE = 400;	// 창을 줄일 수 있는 최소 클라이언트 크기(정사각형 한 변)
+
+struct ViewMap { int x, y, w, h; };
+
+ViewMap GetViewMap(HWND hwnd) {
+	RECT rc;
+	GetClientRect(hwnd, &rc);
+	if (rc.right <= 0 || rc.bottom <= 0) return { 0,0,WINDOW_WIDTH,WINDOW_HEIGHT };
+
+	double sx = (double)rc.right / WINDOW_WIDTH;
+	double sy = (double)rc.bottom / WINDOW_HEIGHT;
+	double scale = (sx < sy) ? sx : sy;
+
+	ViewMap v;
+	v.w = (int)(WINDOW_WIDTH * scale);
+	v.h = (int)(WINDOW_HEIGHT * scale);
+	v.x = (rc.right - v.w) / 2;
+	v.y = (rc.bottom - v.h) / 2;
+	return v;
+}
+
+POINT ClientToLogical(HWND hwnd, int cx, int cy) {
+	ViewMap v = GetViewMap(hwnd);
+	POINT p;
+	p.x = (cx - v.x) * WINDOW_WIDTH / v.w;
+	p.y = (cy - v.y) * WINDOW_HEIGHT / v.h;
+	return p;
+}
+
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
 void CheckLevelUp() {
@@ -1863,8 +1892,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		break;
 	case WM_LBUTTONUP:
 		if (currentState == GAME_LOADING) {
-			int x = LOWORD(lParam);
-			int y = HIWORD(lParam);
+			POINT mp = ClientToLogical(hwnd, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));	// 창 좌표 -> 800x800 기준 좌표
+			int x = mp.x;
+			int y = mp.y;
 
 			// WM_LBUTTONUP or WM_LBUTTONDOWN에서 좌표 확인
 			if (x >= 100 && x <= 700) {
@@ -1881,8 +1911,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		break;
 	case WM_LBUTTONDOWN:
 		if (currentState == GAME_MAP_SELECT && g_myId == 0 && !g_mapSent) {	// 맵은 1P만 고른다
-			int x = LOWORD(lParam);
-			int y = HIWORD(lParam);
+			POINT mp = ClientToLogical(hwnd, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));	// 창 좌표 -> 800x800 기준 좌표
+			int x = mp.x;
+			int y = mp.y;
 
 			if (x >= 100 && x <= 400) {
 				int mapId = -1;
@@ -1898,8 +1929,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		}
 
 		if (isChoosingWeapon) {
-			int mx = LOWORD(lParam);
-			int my = HIWORD(lParam);
+			POINT mp = ClientToLogical(hwnd, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));	// 창 좌표 -> 800x800 기준 좌표
+			int mx = mp.x;
+			int my = mp.y;
 
 			for (int i = 0; i < 3; ++i) {
 				RECT r = GetWeaponCardRect(i);  // 화면에 그려진 카드 전체 영역
@@ -1964,9 +1996,47 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		}
 		break;
 
+	case WM_SIZE:	// 크기가 바뀌면 바로 다시 그린다
+		InvalidateRect(hwnd, NULL, FALSE);
+		return 0;
+
+	case WM_SIZING: {	// 클라이언트 영역이 항상 정사각형(800:800)이 되도록 창 크기를 보정
+		RECT* r = (RECT*)lParam;
+		RECT frame = { 0, 0, 0, 0 };
+		AdjustWindowRect(&frame, WS_OVERLAPPEDWINDOW, FALSE);	// 제목 줄·테두리 크기
+		int fw = frame.right - frame.left;
+		int fh = frame.bottom - frame.top;
+		int cw = (r->right - r->left) - fw;		// 지금 클라이언트 영역
+		int ch = (r->bottom - r->top) - fh;
+
+		int side = (wParam == WMSZ_LEFT || wParam == WMSZ_RIGHT) ? cw
+			: (wParam == WMSZ_TOP || wParam == WMSZ_BOTTOM) ? ch
+			: (cw > ch ? cw : ch);		// 모서리를 끌 때는 더 큰 쪽에 맞춤
+		if (side < MIN_CLIENT_SIZE) side = MIN_CLIENT_SIZE;
+
+		// 끌고 있는 쪽 변을 움직여서 정사각형으로 맞춘다
+		if (wParam == WMSZ_LEFT || wParam == WMSZ_TOPLEFT || wParam == WMSZ_BOTTOMLEFT)
+			r->left = r->right - (side + fw);
+		else
+			r->right = r->left + (side + fw);
+		if (wParam == WMSZ_TOP || wParam == WMSZ_TOPLEFT || wParam == WMSZ_TOPRIGHT)
+			r->top = r->bottom - (side + fh);
+		else
+			r->bottom = r->top + (side + fh);
+		return TRUE;
+	}
+
+	case WM_GETMINMAXINFO: {	// 너무 작게 줄이지 못하게
+		RECT frame = { 0, 0, MIN_CLIENT_SIZE, MIN_CLIENT_SIZE };
+		AdjustWindowRect(&frame, WS_OVERLAPPEDWINDOW, FALSE);
+		MINMAXINFO* mm = (MINMAXINFO*)lParam;
+		mm->ptMinTrackSize.x = frame.right - frame.left;
+		mm->ptMinTrackSize.y = frame.bottom - frame.top;
+		return 0;
+	}
+
 	case WM_MOUSEMOVE:
-		mousePos.x = GET_X_LPARAM(lParam);
-		mousePos.y = GET_Y_LPARAM(lParam);
+		mousePos = ClientToLogical(hwnd, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));	// 800x800 기준 좌표
 		break;
 
 	case WM_PAINT: {
@@ -2256,8 +2326,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			g.DrawImage(endingImg, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
 		}
 
-		// 최종 출력
-		BitBlt(hdc, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, memDC, 0, 0, SRCCOPY);
+		// 최종 출력: 비율을 유지하며 확대·축소, 남는 곳은 검게
+		ViewMap v = GetViewMap(hwnd);
+		RECT rcClient;
+		GetClientRect(hwnd, &rcClient);
+		if (v.w < rcClient.right || v.h < rcClient.bottom) {	// 띠가 있을 때만
+			HBRUSH black = (HBRUSH)GetStockObject(BLACK_BRUSH);
+			RECT rcL = { 0, 0, v.x, rcClient.bottom };
+			RECT rcR = { v.x + v.w, 0, rcClient.right, rcClient.bottom };
+			RECT rcT = { v.x, 0, v.x + v.w, v.y };
+			RECT rcB = { v.x, v.y + v.h, v.x + v.w, rcClient.bottom };
+			FillRect(hdc, &rcL, black);
+			FillRect(hdc, &rcR, black);
+			FillRect(hdc, &rcT, black);
+			FillRect(hdc, &rcB, black);
+		}
+		SetStretchBltMode(hdc, HALFTONE);	// 축소할 때 화질이 좋음
+		SetBrushOrgEx(hdc, 0, 0, NULL);
+		StretchBlt(hdc, v.x, v.y, v.w, v.h, memDC, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, SRCCOPY);
 
 		EndPaint(hwnd, &ps);
 		return 0;
