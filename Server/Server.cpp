@@ -47,8 +47,8 @@ bool Server::Init() {
 	gameStartEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
 	if (gameStartEvent == nullptr) return false;
 
-	world.Init(&recvQ, &sendQ, gameStartEvent, &startInfo);
-	worldThread = CreateThread(nullptr, 0, World::ThreadMain, &world, 0, nullptr);
+	world->Init(&recvQ, &sendQ, gameStartEvent, &startInfo);
+	worldThread = CreateThread(nullptr, 0, World::ThreadMain, world.get(), 0, nullptr);
 	if (worldThread == nullptr) return false;
 
 	printf("서버 시작: TCP %d, UDP %d\n", SERVER_TCP_PORT, SERVER_UDP_PORT);
@@ -138,7 +138,7 @@ void Server::Shutdown() {
 	listenSock = INVALID_SOCKET;
 
 	if (worldThread) {
-		world.Stop();
+		world->Stop();
 		SetEvent(gameStartEvent);	
 		WaitForSingleObject(worldThread, INFINITE);
 		CloseHandle(worldThread);
@@ -187,7 +187,7 @@ void Server::OnAccept() {
 			}
 		}
 		if (slot == nullptr) {
-			printf("접속 거절: 빈 자리 없음\n");
+			printf(gameStarted ? "접속 거절: 게임 진행 중\n" : "접속 거절: 빈 자리 없음\n");
 			closesocket(cs);
 			continue;
 		}
@@ -283,4 +283,37 @@ void Server::Disconnect(Session& s) {
 	if (gameStarted)
 		recvQ.Push(RecvEvent{ RecvKind::Disconnect, (uint8_t)s.playerId, {} });
 	s.Reset();
+
+	if (!gameStarted) return;
+	for (const Session& other : sessions) {
+		if (other.sock != INVALID_SOCKET) return;
+	}
+	ResetToLobby();
+}
+
+
+void Server::ResetToLobby() {
+	world->Stop();
+	WaitForSingleObject(worldThread, INFINITE);
+	CloseHandle(worldThread);
+	worldThread = nullptr;
+
+	std::vector<RecvEvent> oldRecv;
+	recvQ.SwapOut(oldRecv);
+	sendQ.SwapOut(sendBuf);
+	sendBuf.clear();
+
+	ResetEvent(gameStartEvent);		// 수동 리셋 Event를 다시 비신호로
+	gameStarted = false;
+	mapSelected = false;
+	startInfo = GameStartInfo{};
+
+	world = std::make_unique<World>();
+	world->Init(&recvQ, &sendQ, gameStartEvent, &startInfo);
+	worldThread = CreateThread(nullptr, 0, World::ThreadMain, world.get(), 0, nullptr);
+	if (worldThread == nullptr) {
+		printf("월드 스레드 생성 실패\n");
+		return;
+	}
+	printf("모두 나가서 로비로 초기화\n");
 }
