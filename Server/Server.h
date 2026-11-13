@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <WinSock2.h>
 #include <Windows.h>
+#include <memory>
 #include "Protocol.h"
 #include "EventQueue.h"
 #include "Events.h"
@@ -26,11 +27,12 @@ private:
 	void CheckGameStart();			
 	void FlushSendQueue();			
 	void Disconnect(Session& s);	
+	void ResetToLobby();
 
 	SOCKET listenSock = INVALID_SOCKET;
 	Session sessions[MAX_PLAYERS];
 	UdpEndpoint udp;
-	World world;
+	std::unique_ptr<World> world = std::make_unique<World>();	// 로비로 초기화할 때 새 객체로 바꾼다
 
 	EventQueue<RecvEvent> recvQ;	
 	EventQueue<SendEvent> sendQ;
