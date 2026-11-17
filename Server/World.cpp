@@ -11,6 +11,9 @@ constexpr uint32_t SPAWN_INTERVAL_MS = 1000;// 적 생성 주기
 constexpr int SPAWN_MAX_PER_WAVE = 10;// 한 번에 만드는 최대 수
 constexpr int SPAWN_MARGIN = 32;// 화면 바깥으로 얼마나 떨어져서 나오는지
 constexpr size_t MAX_ENEMIES = 500;// 스냅샷 크기와 서버 부하 보호용 상한
+constexpr uint32_t CONTACT_INTERVAL_MS = 100;// 원본 충돌 타이머(100ms)와 같은 주기
+constexpr float CONTACT_DIST = 32.0f;// 이 거리 안이면 닿은 것 (원본 CheckCollision)
+constexpr int CONTACT_DAMAGE = 1;// 닿은 적 1마리당 피해
 
 void World::Init(EventQueue<RecvEvent>* rq, EventQueue<SendEvent>* sq,
 	HANDLE ev, const GameStartInfo* info) {
@@ -51,6 +54,7 @@ void World::SpawnPlayer() {
 	enemies.clear();
 	nextEnemyId = 1;
 	lastSpawnMs = nowMs;
+	lastContactMs = nowMs;
 }
 
 void World::UpdatePlayers() {
@@ -130,11 +134,20 @@ void World::SpawnEnemy() {
 	enemies.push_back(e);
 }
 
-const ServerPlayer* World::PickTarget(const ServerEnemy&) const {
-	// 임시: 살아 있는 첫 플레이어. 11/17에 가까운 플레이어로 교체
-	for (const ServerPlayer& p : players)
-		if (p.active && p.hp > 0)return &p;
-	return nullptr;
+const ServerPlayer* World::PickTarget(const ServerEnemy& e) const {
+	const ServerPlayer* best = nullptr;
+	float bestDistSq = 0;
+	for (const ServerPlayer& p : players) {
+		if (!p.active || p.hp <= 0)continue;// 나갔거나 죽은 플레이어는 쫓지 않음
+		float dx = p.x - e.x;
+		float dy = p.y - e.y;
+		float distSq = dx * dx + dy * dy;// 크기 비교만 하므로 sqrt 생략
+		if (!best || distSq < bestDistSq) {
+			best = &p;
+			bestDistSq = distSq;
+		}
+	}
+	return best;
 }
 
 void World::UpdateEnemies() {
@@ -152,6 +165,23 @@ void World::UpdateEnemies() {
 		if (step > len)step = len;// 플레이어를 지나쳐서 앞뒤로 떨리지 않게
 		e.x += dx / len * step;
 		e.y += dy / len * step;
+	}
+}
+
+void World::UpdateContactDamage() {
+	if (nowMs - lastContactMs < CONTACT_INTERVAL_MS)return;
+	lastContactMs += CONTACT_INTERVAL_MS;// = nowMs로 하면 33ms 틱 때문에 132ms마다 판정돼 피해가 줄어듦
+
+	for (ServerPlayer& p : players) {
+		if (!p.active || p.hp <= 0)continue;
+		int hits = 0;
+		for (const ServerEnemy& e : enemies) {
+			float dx = p.x - e.x;
+			float dy = p.y - e.y;
+			if (dx * dx + dy * dy < CONTACT_DIST * CONTACT_DIST)++hits;
+		}
+		p.hp -= hits * CONTACT_DAMAGE;
+		if (p.hp < 0)p.hp = 0;// 사망·관전 처리는 12/3
 	}
 }
 
@@ -182,16 +212,11 @@ void World::Update(uint32_t dtMs) {
 	UpdatePlayers();
 	SpawnEnemiesPerTick();
 	UpdateEnemies();
+	UpdateContactDamage();
 	SendSnapshot();
 }
 
 void World::SendSnapshot() {
-	std::vector<char> buf(sizeof(S2C_SnapshotHead));// 헤더 자리만 먼저 잡음
-	auto put = [&](const void* p, size_t n) {
-		const char* c = static_cast<const char*>(p);
-		buf.insert(buf.end(), c, c + n);
-	};
-
 	PlayerState ps[MAX_PLAYERS]{};
 	for (int i = 0; i < MAX_PLAYERS; ++i) {
 		const ServerPlayer& p = players[i];
@@ -202,23 +227,60 @@ void World::SendSnapshot() {
 		ps[i].level = 1;
 		ps[i].aimAngle = p.aimAngle;
 	}
-	put(ps, sizeof(ps));
 
-	// Protocol.h 순서: 0번 조각만 보스, 탄막, 기믹 수가 적 수 앞에 온다. 지금은 전부 0
-	uint8_t bossCount = 0;		put(&bossCount, sizeof(bossCount));
-	uint16_t bulletCount = 0;	put(&bulletCount, sizeof(bulletCount));
-	uint8_t gimmickCount = 0;	put(&gimmickCount, sizeof(gimmickCount));
-	uint16_t enemyCount = 0;	put(&enemyCount, sizeof(enemyCount));
+	// 적을 보낼 형태로 변환
+	std::vector<EnemyState> es;
+	es.reserve(enemies.size());
+	for (const ServerEnemy& e : enemies) {
+		EnemyState s{};
+		s.id = e.id;
+		s.type = e.type;
+		s.x = (int16_t)lroundf(e.x);
+		s.y = (int16_t)lroundf(e.y);
+		es.push_back(s);
+	}
 
-	// insert 중에 버퍼가 다시 할당될 수 있으므로 헤더는 마지막에 채움
-	S2C_SnapshotHead* h = reinterpret_cast<S2C_SnapshotHead*>(buf.data());
-	h->header.size = (uint16_t)buf.size();
-	h->header.type = S2C_SNAPSHOT;
-	h->tick = tick;
-	h->fragIndex = 0;
-	h->fragCount = 1;
+	// 조각 하나에 들어가는 적 수 = (1400 - 고정 부분) / 적 1마리 크기
+	const size_t fixedBytes = sizeof(S2C_SnapshotHead) + sizeof(ps) + sizeof(uint16_t);// 머리 + 플레이어 + 적 수
+	const size_t extra0 = sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint8_t);// 0번 조각만: 보스, 탄막, 기믹 수
+	const size_t perFrag0 = (MAX_UDP_SIZE - fixedBytes - extra0) / sizeof(EnemyState);
+	const size_t perFrag = (MAX_UDP_SIZE - fixedBytes) / sizeof(EnemyState);
 
-	sendQ->Push(SendEvent{ TARGET_ALL, true, std::move(buf) });
+	size_t fragCount = 1;
+	if (es.size() > perFrag0)
+		fragCount += (es.size() - perFrag0 + perFrag - 1) / perFrag;// 남은 적을 올림 나눗셈
+
+	size_t next = 0;// 다음에 담을 적 번호
+	for (size_t f = 0; f < fragCount; ++f) {
+		std::vector<char> buf(sizeof(S2C_SnapshotHead));// 헤더 자리만 먼저 잡음
+		auto put = [&](const void* p, size_t n) {
+			const char* c = static_cast<const char*>(p);
+			buf.insert(buf.end(), c, c + n);
+		};
+
+		put(ps, sizeof(ps));// 모든 조각에 같은 플레이어 정보
+		if (f == 0) {// 0번 조각만 보스, 탄막, 기믹 (지금은 전부 0개)
+			uint8_t bossCount = 0;		put(&bossCount, sizeof(bossCount));
+			uint16_t bulletCount = 0;	put(&bulletCount, sizeof(bulletCount));
+			uint8_t gimmickCount = 0;	put(&gimmickCount, sizeof(gimmickCount));
+		}
+
+		size_t room = (f == 0) ? perFrag0 : perFrag;
+		uint16_t n = (uint16_t)(std::min)(es.size() - next, room);
+		put(&n, sizeof(n));
+		if (n > 0)put(&es[next], n * sizeof(EnemyState));
+		next += n;
+
+		// insert 중에 버퍼가 다시 할당될 수 있으므로 헤더는 마지막에 채움
+		S2C_SnapshotHead* h = reinterpret_cast<S2C_SnapshotHead*>(buf.data());
+		h->header.size = (uint16_t)buf.size();
+		h->header.type = S2C_SNAPSHOT;
+		h->tick = tick;
+		h->fragIndex = (uint8_t)f;
+		h->fragCount = (uint8_t)fragCount;
+
+		sendQ->Push(SendEvent{ TARGET_ALL, true, std::move(buf) });
+	}
 }
 
 void World::BroadcastGameStart() {

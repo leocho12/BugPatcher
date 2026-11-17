@@ -40,6 +40,7 @@ public:
 	void UpdatePlayers();// 한 틱만큼 이동
 	void SpawnEnemiesPerTick();// 이번 틱에 만들 적 수를 정해 생성 (1초마다 1~10마리, 나머지 틱은 0마리)
 	void UpdateEnemies();// 적을 한 틱만큼 이동
+	void UpdateContactDamage();// 100ms마다 적과 닿은 플레이어 HP 감소
 	void Update(uint32_t dtMs);// 한 틱 시뮬레이션
 	void SendSnapshot();// 현재 상태를 S2C_SNAPSHOT으로 만들어 송신 큐에 넣음
 	void BroadcastGameStart();// 시작 위치를 정한 뒤 S2C_GAME_START를 두 클라에 보냄
@@ -58,6 +59,7 @@ private:
 	std::vector<ServerEnemy> enemies;
 	uint16_t nextEnemyId = 1;
 	uint64_t lastSpawnMs = 0;// 마지막으로 적을 만든 게임 시간
+	uint64_t lastContactMs = 0;// 마지막 접촉 판정 게임 시간
 	std::mt19937 rng{ std::random_device{}() };// 월드 스레드만 사용
 	uint64_t nowMs = 0;// 게임 시간. 틱마다 TICK_MS씩 누적
 	uint32_t tick = 0;// 스냅샷 번호
