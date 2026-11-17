@@ -41,6 +41,7 @@ void World::OnSelectWeapon(int,const C2S_SelectWeapon&){}
 void World::OnDisconnect(int playerId) {
 	if (playerId < 0 || playerId >= MAX_PLAYERS)return;
 	players[playerId].active = false;
+	players[playerId].hp = 0;	// 나간 플레이어는 사망 처리
 }
 
 void World::SpawnPlayer() {

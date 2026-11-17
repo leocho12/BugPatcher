@@ -1875,6 +1875,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		g_connected = false;
 		g_myId = -1;
 		g_mapSent = false;
+		enemies.clear();	
 		KillTimer(hwnd, TIMER_NET_INPUT);
 		KillTimer(hwnd, TIMER_NET_RENDER);
 		g_netStatus = L"서버와 연결이 끊겼습니다";
@@ -2044,13 +2045,25 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		HDC hdc = BeginPaint(hwnd, &ps);
 		// 서버 스냅샷의 내 위치로 전역(playerPos, playerHP)을 덮어쓰고 카메라를 맞춘다
 		NetPlayerView netPlayers[NET_MAX_PLAYERS];
+		static std::vector<NetEnemyView> netEnemies;	// 매 프레임 새로 만들지 않고 재사용
 		bool hasNet = (currentState == GAME_PLAYING || currentState == GAME_PLAYING2)
-			&& g_myId >= 0 && NetGetPlayers(netPlayers);
+			&& g_myId >= 0 && NetGetState(netPlayers, netEnemies);
 		if (hasNet) {
 			playerPos.x = netPlayers[g_myId].x;
 			playerPos.y = netPlayers[g_myId].y;
-			playerHP = netPlayers[g_myId].hp;
+			playerHP = (std::max)(netPlayers[g_myId].hp, 0);	// 음수면 체력 바가 거꾸로 그려지므로 0으로
 			UpdateCamera();
+
+			// 적: 원작 그리기 코드가 읽는 전역 enemies를 스냅샷 값으로 바꾼다
+			enemies.clear();
+			for (const NetEnemyView& ne : netEnemies) {
+				Enemy e{};
+				e.id = ne.id;
+				e.type = ne.type;
+				e.x = (float)ne.x;
+				e.y = (float)ne.y;
+				enemies.push_back(e);
+			}
 		}
 		int offsetX = playerPos.x - WINDOW_WIDTH / 2;
 		int offsetY = playerPos.y - WINDOW_HEIGHT / 2;
@@ -2201,7 +2214,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		}
 
 		// 상대 플레이어 그리기
-		if (hasNet) {
+		if (hasNet && netPlayers[1 - g_myId].hp > 0) {
 			int other = 1 - g_myId;
 			int ox = netPlayers[other].x - cameraX;
 			int oy = netPlayers[other].y - cameraY;
@@ -2212,6 +2225,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			SetTextColor(memDC, RGB(255, 255, 0));
 			const wchar_t* label = (other == 0) ? L"1P" : L"2P";
 			TextOutW(memDC, ox - 8, oy - 36, label, lstrlenW(label));
+
+			// 상대 HP 바
+			int bx = ox - 32, by = oy + 36;
+			RECT bg = { bx, by, bx + 64, by + 8 };
+			HBRUSH bgBrush = CreateSolidBrush(RGB(50, 50, 50));
+			FillRect(memDC, &bg, bgBrush);
+			DeleteObject(bgBrush);
+			RECT fill = { bx, by, bx + 64 * netPlayers[other].hp / playerhp, by + 8 };
+			HBRUSH hpBrush = CreateSolidBrush(RGB(255, 80, 80));
+			FillRect(memDC, &fill, hpBrush);
+			DeleteObject(hpBrush);
 		}
 
 		// 플레이어 그리기

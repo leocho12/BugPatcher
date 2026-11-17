@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include <vector>
 
 constexpr int NET_MAX_PLAYERS = 2;
 
@@ -8,5 +9,11 @@ struct NetPlayerView {
 	float aimAngle;
 };
 
+struct NetEnemyView {
+	int id;
+	int type;		// 0 일반, 1 빠름, 2 탱크 (GameTypes.h EnemyType과 같은 순서)
+	int x, y;
+};
+
 // 완성된 스냅샷이 있으면 true. 메인(UI) 스레드에서만 호출
-bool NetGetPlayers(NetPlayerView out[NET_MAX_PLAYERS]);
+bool NetGetState(NetPlayerView players[NET_MAX_PLAYERS], std::vector<NetEnemyView>& enemies);

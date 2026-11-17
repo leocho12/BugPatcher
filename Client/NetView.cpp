@@ -2,17 +2,22 @@
 #include "SnapshotBuffer.h"
 
 extern SnapshotBuffer g_snapshot;
-static_assert(NET_MAX_PLAYERS == MAX_PLAYERS, "플레이어 수가 GameTypes.h와 같아야 합니다.");
+static_assert(NET_MAX_PLAYERS == MAX_PLAYERS, "플레이어 수가 GameTypes.h와 같아야 한다");
+static_assert(ENEMY_NORMAL == 0 && ENEMY_FAST == 1 && ENEMY_TANK == 2, "적 종류 번호가 BugPather와 같아야 한다");
 
-bool NetGetPlayers(NetPlayerView out[NET_MAX_PLAYERS]) {
-	static Snapshot snap;
+bool NetGetState(NetPlayerView players[NET_MAX_PLAYERS], std::vector<NetEnemyView>& enemies) {
+	static Snapshot snap;	
 	if (!g_snapshot.CopyTo(snap)) return false;	
 
 	for (int i = 0; i < MAX_PLAYERS; ++i) {
-		out[i].x = snap.player[i].x;
-		out[i].y = snap.player[i].y;
-		out[i].hp = snap.player[i].hp;
-		out[i].aimAngle = snap.player[i].aimAngle;
+		players[i].x = snap.player[i].x;
+		players[i].y = snap.player[i].y;
+		players[i].hp = snap.player[i].hp;
+		players[i].aimAngle = snap.player[i].aimAngle;
 	}
+
+	enemies.clear();
+	for (const EnemyState& e : snap.enemies)
+		enemies.push_back(NetEnemyView{ e.id, e.type, e.x, e.y });
 	return true;
 }
