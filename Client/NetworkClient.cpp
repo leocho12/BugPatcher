@@ -1,7 +1,11 @@
 ﻿#include "NetworkClient.h"
 #include <WS2tcpip.h>
+#include <mstcpip.h>	// tcp_keepalive, SIO_KEEPALIVE_VALS
 #include <cstring>
 #include "Protocol.h"
+
+constexpr ULONG KEEPALIVE_IDLE_MS = 5000;		// 이만큼 조용하면 확인 패킷을 보낸다 (기본값은 2시간)
+constexpr ULONG KEEPALIVE_INTERVAL_MS = 1000;	// 응답이 없으면 이 간격으로 다시 보낸다 (Windows는 10번 재전송 후 끊는다)
 
 bool NetworkClient::Connect(const char* serverIp, HWND wnd) {
 	hwnd = wnd;
@@ -22,6 +26,13 @@ bool NetworkClient::Connect(const char* serverIp, HWND wnd) {
 
 	BOOL noDelay = TRUE;
 	setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&noDelay, sizeof(noDelay));
+
+	// 서버가 신호 없이 사라져도(랜선 분리, 전원 꺼짐) 알아내도록 keepalive를 켠다. 끊기면 수신 스레드의 recv가 오류로 끝난다
+	BOOL keepAlive = TRUE;
+	setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, (const char*)&keepAlive, sizeof(keepAlive));
+	tcp_keepalive ka{ 1, KEEPALIVE_IDLE_MS, KEEPALIVE_INTERVAL_MS };	// 켜기, 조용한 시간, 재전송 간격
+	DWORD kaBytes = 0;
+	WSAIoctl(sock, SIO_KEEPALIVE_VALS, &ka, sizeof(ka), nullptr, 0, &kaBytes, nullptr, nullptr);
 
 	recvThread = CreateThread(nullptr, 0, RecvThread, this, 0, nullptr);
 	if (recvThread == nullptr) {

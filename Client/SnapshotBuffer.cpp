@@ -34,6 +34,7 @@ void SnapshotBuffer::WriteFragment(const char* data, int len) {
 	if (head.fragCount == 0 || head.fragCount > 32 || head.fragIndex >= head.fragCount) return;
 
 	if (head.tick <= lastPublished) return;// 이미 완성한 것보다 오래된 조각 (UDP 순서 뒤바뀜)
+	if (building.tick != 0 && head.tick < building.tick) return;// 조립 중인 tick보다 오래된 조각이 늦게 온 것. 받아 주면 조립 중이던 조각이 버려진다
 	if (head.tick != building.tick) {// 새 틱 시작. 덜 모인 이전 틱은 버림
 		building.tick = head.tick;
 		building.enemies.clear();
