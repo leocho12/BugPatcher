@@ -29,6 +29,7 @@ bool g_connected = false;
 const wchar_t* g_netStatus = L"서버 IP 입력 후 Enter";
 int g_myId = -1;
 bool g_mapSent = false;
+int g_selectedMap = -1;						// 1P가 고른 맵 (-1: 아직 안 고름). 화면 표시용
 const UINT_PTR TIMER_NET_RENDER = 21;
 bool g_autoMove = false;// F2로 켜고 끔. 켜면 포커스와 상관없이 네모를 그리며 이동 입력을 보냄
 
@@ -181,6 +182,34 @@ void DrawMapSelectScreen(HDC hdc) {
 	};
 	FillRect(hdc, &textBox2, textBrush);
 	DrawText(hdc, L"   기믹 맵 - 보유기믹 : CD, Fan", -1, &textBox2, DT_VCENTER | DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+
+		// === 로비 정보 ===
+	// 맨 위: 내 번호와 닉네임
+	if (g_myId >= 0) {
+		wchar_t head[64];
+		swprintf_s(head, L"%s · %S", (g_myId == 0) ? L"1P" : L"2P", g_nickname);
+		TextOutW(hdc, startX, 90, head, lstrlenW(head));
+	}
+
+	// 1P가 고른 맵에 노란 테두리
+	if (g_selectedMap >= 0) {
+		RECT sel = (g_selectedMap == 0) ? button1 : button2;
+		HPEN pen = CreatePen(PS_SOLID, 4, RGB(255, 220, 0));
+		HPEN oldPen = (HPEN)SelectObject(hdc, pen);
+		HBRUSH oldBr = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+		Rectangle(hdc, sel.left, sel.top, sel.right, sel.bottom);
+		SelectObject(hdc, oldBr);
+		SelectObject(hdc, oldPen);
+		DeleteObject(pen);
+	}
+
+	// 2P는 맵을 고를 수 없으니 버튼을 어둡게 덮는다
+	if (g_myId == 1) {
+		SolidBrush shade(Color(150, 0, 0, 0));	// 반투명 검정
+		graphics.FillRectangle(&shade, (INT)button1.left, (INT)button1.top,
+			(INT)(button1.right - button1.left), (INT)(button2.bottom - button1.top));
+	}
+
 
 	// 정리
 	DeleteObject(textBrush);
@@ -1875,6 +1904,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		g_connected = false;
 		g_myId = -1;
 		g_mapSent = false;
+		g_selectedMap = -1;
 		enemies.clear();	
 		KillTimer(hwnd, TIMER_NET_INPUT);
 		KillTimer(hwnd, TIMER_NET_RENDER);
@@ -1923,6 +1953,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				if (mapId >= 0) {
 					g_net.SendMapSelect((uint8_t)mapId);
 					g_mapSent = true;
+					g_selectedMap = mapId;
 					g_netStatus = L"맵 선택 완료, 다른 플레이어를 기다리는 중...";
 					InvalidateRect(hwnd, NULL, FALSE);
 				}
