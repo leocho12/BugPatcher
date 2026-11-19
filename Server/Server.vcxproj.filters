@@ -35,6 +35,9 @@
     <ClInclude Include="UdpEndpoint.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+    <ClInclude Include="WeaponDef.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
     <ClInclude Include="World.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
