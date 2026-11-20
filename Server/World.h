@@ -36,6 +36,11 @@ struct ServerPlayer {
 	WeaponState weapons[WEAPON_COUNT];// 무기별 상태 (WeaponType 순서)
 	HomingState homing;// 소금총 탄
 	int killCount = 0;// 이 플레이어가 마지막으로 때려서 잡은 적 수
+	int level = 1;
+	int levelKills = 0;// 현재 레벨에서 잡은 킬
+	int pendingLevelUps = 0;// 카드 선택 중 올라간 레벨업 대기 수
+	bool chossing = false;// 카드 선택 중
+	uint8_t choice[LEVELUP_CHOICES] = {};
 };
 
 // 서버가 들고있는 적 1마리의 상태
