@@ -92,6 +92,7 @@ private:
 	void ReapDeadEnemies();// HP가 0 이하인 적을 지우고 킬을 마지막으로 때린 플레이어에게 준다
 	void OnKill(int playerId);
 	void TryStartLevelUp(int playerId);
+	void SendLevelUp(int playerId);// 레벨업한 플레이어에게 카드 3장을 보냄
 	void UpdateSlash(int playerId);// 파리채
 	void UpdateCircle(int playerId);// 전기장
 	void UpdateBreath(int playerId);// 에프킬라
