@@ -90,6 +90,8 @@ private:
 	void ResetWeapons(ServerPlayer& p);// 게임 시작 시 무기 초기화 (파리채 1레벨만 가지고 시작)
 	void DamageEnemy(ServerEnemy& e, int damage, int playerId);// 피해를 주고 마지막으로 때린 플레이어를 기록
 	void ReapDeadEnemies();// HP가 0 이하인 적을 지우고 킬을 마지막으로 때린 플레이어에게 준다
+	void OnKill(int playerId);
+	void TryStartLevelUp(int playerId);
 	void UpdateSlash(int playerId);// 파리채
 	void UpdateCircle(int playerId);// 전기장
 	void UpdateBreath(int playerId);// 에프킬라
