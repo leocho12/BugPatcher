@@ -36,6 +36,11 @@ struct ServerPlayer {
 	WeaponState weapons[WEAPON_COUNT];// 무기별 상태 (WeaponType 순서)
 	HomingState homing;// 소금총 탄
 	int killCount = 0;// 이 플레이어가 마지막으로 때려서 잡은 적 수
+	int level = 1;
+	int levelKills = 0;// 현재 레벨에서 잡은 킬
+	int pendingLevelUps = 0;// 카드 선택 중 올라간 레벨업 대기 수
+	bool choosing = false;// 카드 선택 중
+	uint8_t choices[LEVELUP_CHOICES] = {};
 };
 
 // 서버가 들고있는 적 1마리의 상태
@@ -85,6 +90,9 @@ private:
 	void ResetWeapons(ServerPlayer& p);// 게임 시작 시 무기 초기화 (파리채 1레벨만 가지고 시작)
 	void DamageEnemy(ServerEnemy& e, int damage, int playerId);// 피해를 주고 마지막으로 때린 플레이어를 기록
 	void ReapDeadEnemies();// HP가 0 이하인 적을 지우고 킬을 마지막으로 때린 플레이어에게 준다
+	void OnKill(int playerId);
+	void TryStartLevelUp(int playerId);
+	void SendLevelUp(int playerId);// 레벨업한 플레이어에게 카드 3장을 보냄
 	void UpdateSlash(int playerId);// 파리채
 	void UpdateCircle(int playerId);// 전기장
 	void UpdateBreath(int playerId);// 에프킬라

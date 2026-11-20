@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <cstdint>
 
 // 공용 상수
@@ -8,6 +8,7 @@ constexpr int VIEW_WIDTH = 800;
 constexpr int VIEW_HEIGHT = 800;
 constexpr int MAX_PLAYERS = 2;
 constexpr int PLAYER_MAX_HP = 200;
+constexpr int MAX_LEVEL = 15;
 
 constexpr uint16_t SERVER_TCP_PORT = 9000;
 constexpr uint16_t SERVER_UDP_PORT = 9000;
