@@ -1072,10 +1072,18 @@ int FindBestTarget() {
 	return bestIndex;
 }
 
+// 마우스가 가리키는 방향(라디안). 서버의 파리채·에프킬라가 이 방향으로 나간다.
+// 원작은 슬래시 타이머가 weaponAngle을 계산했지만 네트워크 모드에서는 그 타이머가 돌지 않아서 따로 계산한다
+float CalcAimAngle() {
+	int screenPlayerX = playerPos.x - cameraX;
+	int screenPlayerY = playerPos.y - cameraY;
+	return atan2f((float)(mousePos.y - screenPlayerY), (float)(mousePos.x - screenPlayerX));
+}
+
 void SendNetInput(HWND hwnd) {
 	if (g_autoMove) {
 		static const uint8_t pat[4] = { 1 << 3,1 << 2,1 << 1,1 << 0 };
-		g_udp.SendInput(pat[(GetTickCount() / 2000) % 4], weaponAngle);
+		g_udp.SendInput(pat[(GetTickCount() / 2000) % 4], CalcAimAngle());
 		return;
 	}
 	uint8_t keys = 0;
@@ -1085,7 +1093,7 @@ void SendNetInput(HWND hwnd) {
 		if (GetAsyncKeyState('S') & 0x8000) keys |= 1 << 2;	// KEY_S
 		if (GetAsyncKeyState('D') & 0x8000) keys |= 1 << 3;	// KEY_D
 	}
-	g_udp.SendInput(keys, weaponAngle);	// 등록 전이면 UdpClient가 알아서 무시
+	g_udp.SendInput(keys, CalcAimAngle());	// 등록 전이면 UdpClient가 알아서 무시
 }
 
 void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {

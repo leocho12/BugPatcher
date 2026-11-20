@@ -15,6 +15,75 @@ constexpr uint32_t CONTACT_INTERVAL_MS = 100;// 원본 충돌 타이머(100ms)�
 constexpr float CONTACT_DIST = 32.0f;// 이 거리 안이면 닿은 것 (원본 CheckCollision)
 constexpr int CONTACT_DAMAGE = 1;// 닿은 적 1마리당 피해
 
+namespace {
+	struct IPoint { int x, y; };
+
+	// 원작 BugPather.cpp의 PointInPolygon / RectPolygonCollision을 그대로 옮김 (좌표를 int로 자르는 것까지 같다)
+	bool PointInPolygon(const IPoint* poly, int n, float x, float y) {
+		int count = 0;
+		for (int i = 0; i < n; ++i) {
+			IPoint p1 = poly[i];
+			IPoint p2 = poly[(i + 1) % n];
+			if ((p1.y > y) != (p2.y > y)) {
+				float atX = (float)(p2.x - p1.x) * (y - p1.y) / (p2.y - p1.y) + p1.x;
+				if (x < atX)count++;
+			}
+		}
+		return (count % 2) == 1;
+	}
+
+	bool RectPolygonCollision(const IPoint* poly, int polyCount, float rectX, float rectY, float rectW, float rectH) {
+		// 1. 적 사각형의 4점이 무기 폴리곤 안에 있는지
+		IPoint rectPts[4] = {
+			{ (int)rectX, (int)rectY },
+			{ (int)(rectX + rectW), (int)rectY },
+			{ (int)(rectX + rectW), (int)(rectY + rectH) },
+			{ (int)rectX, (int)(rectY + rectH) },
+		};
+		for (int i = 0; i < 4; i++)
+			if (PointInPolygon(poly, polyCount, (float)rectPts[i].x, (float)rectPts[i].y))return true;
+
+		// 2. 무기 폴리곤의 점이 적 사각형 안에 있는지
+		for (int i = 0; i < polyCount; i++) {
+			float px = (float)poly[i].x;
+			float py = (float)poly[i].y;
+			if (px >= rectX && px <= rectX + rectW && py >= rectY && py <= rectY + rectH)return true;
+		}
+		return false;
+	}
+
+	// 쿨타임·지속 시간이 있는 무기(파리채, 에프킬라). 원작 weaponCoolTime과 같은 규칙이다.
+	// 쿨타임이 지나면 켜지고 durationMs 동안 켜져 있으며, 켜져 있는 동안 tickMs가 지날 때마다 hit()를 부른다.
+	// 33ms 틱 하나에 판정 시각이 여러 번 지나갈 수 있어(파리채 16ms) 지난 횟수만큼 부른다. 그래야 원작과 초당 피해가 같다
+	template<class F>
+	void StepWindow(int64_t now, WeaponState& w, const WeaponDef& d, F&& hit) {
+		if (w.level == 0) { w.active = false; return; }
+		if (!w.active && now - w.lastFireMs >= (int64_t)d.cooldownMs) {
+			w.active = true;
+			w.lastFireMs = now;
+			w.lastTickMs = now;
+		}
+		if (!w.active)return;
+		const int64_t until = (std::min)(now, w.lastFireMs + (int64_t)d.durationMs);// 켜져 있는 시간을 넘겨서 판정하지 않음
+		while (w.lastTickMs + (int64_t)d.tickMs <= until) {
+			w.lastTickMs += d.tickMs;
+			hit();
+		}
+		if (now - w.lastFireMs >= (int64_t)d.durationMs)w.active = false;
+	}
+
+	// 항상 켜져 있는 무기(전기장, 홈매트). tickMs가 지날 때마다 hit()를 부른다
+	template<class F>
+	void StepAlways(int64_t now, WeaponState& w, const WeaponDef& d, F&& hit) {
+		if (w.level == 0) { w.active = false; return; }
+		w.active = true;
+		while (w.lastTickMs + (int64_t)d.tickMs <= now) {
+			w.lastTickMs += d.tickMs;
+			hit();
+		}
+	}
+}
+
 void World::Init(EventQueue<RecvEvent>* rq, EventQueue<SendEvent>* sq,
 	HANDLE ev, const GameStartInfo* info) {
 	recvQ = rq;
@@ -34,7 +103,7 @@ void World::OnInput(int playerId, const C2S_Input& pkt) {
 	if (pkt.seq <= p.lastseq)return;// UDP를 쓰면 패킷이 늦게 도착할 수 있으므로 시퀀스 번호를 보고 이전 패킷이면 무시
 	p.lastseq = pkt.seq;
 	p.lastkeys = pkt.keys;
-	p.aimAngle = pkt.aimAngle;
+	if (std::isfinite(pkt.aimAngle))p.aimAngle = pkt.aimAngle;// 이상한 값(NaN 등)이 오면 이전 조준을 유지
 }
 
 void World::OnSelectWeapon(int,const C2S_SelectWeapon&){}
@@ -50,6 +119,7 @@ void World::SpawnPlayer() {
 		players[i].active = true;
 		players[i].x = MAP_WIDTH / 2.0f + (i == 0 ? -50.0f : 50.0f);// 겹치지 않게 맵 중앙의 좌우에서 스폰
 		players[i].y = MAP_HEIGHT / 2.0f;
+		ResetWeapons(players[i]);
 	}
 	// 이전 판의 적이 남지 않게 초기화
 	enemies.clear();
@@ -186,6 +256,199 @@ void World::UpdateContactDamage() {
 	}
 }
 
+void World::ResetWeapons(ServerPlayer& p) {
+	for (int w = 0; w < WEAPON_COUNT; ++w) {
+		p.weapons[w] = WeaponState{};
+		p.weapons[w].lastFireMs = (int64_t)nowMs - (int64_t)WEAPON_DEFS[w].cooldownMs;// 얻자마자 발동할 수 있다 (원작은 lastAttackTime = 0)
+		p.weapons[w].lastTickMs = (int64_t)nowMs;
+	}
+	p.weapons[WEAPON_SLASH].level = 1;// 파리채는 처음부터 가지고 시작한다
+	p.homing = HomingState{};
+}
+
+void World::GrantWeapon(int playerId, int weaponType) {
+	if (playerId < 0 || playerId >= MAX_PLAYERS)return;
+	if (weaponType < 0 || weaponType >= WEAPON_COUNT)return;
+	ServerPlayer& p = players[playerId];
+	WeaponState& w = p.weapons[weaponType];
+	if (w.level == 0) {// 처음 얻음: 바로 발동할 수 있게 시각을 맞춘다
+		w.active = false;
+		w.lastFireMs = (int64_t)nowMs - (int64_t)WEAPON_DEFS[weaponType].cooldownMs;
+		w.lastTickMs = (int64_t)nowMs;
+		if (weaponType == WEAPON_HOMING)p.homing = HomingState{};
+	}
+	if (w.level < 255)++w.level;// 강화. 홈매트는 원작에서도 강화 효과가 없지만 레벨 표시는 올린다
+}
+
+void World::DamageEnemy(ServerEnemy& e, int damage, int playerId) {
+	if (damage <= 0)return;
+	e.hp -= damage;
+	e.lastHitBy = (int8_t)playerId;
+}
+
+void World::ReapDeadEnemies() {
+	bool any = false;
+	for (const ServerEnemy& e : enemies) {
+		if (e.hp > 0)continue;
+		any = true;
+		if (e.lastHitBy >= 0 && e.lastHitBy < MAX_PLAYERS)++players[e.lastHitBy].killCount;// 킬은 마지막으로 때린 플레이어에게
+	}
+	if (!any)return;
+	enemies.erase(std::remove_if(enemies.begin(), enemies.end(), [](const ServerEnemy& e) { return e.hp <= 0; }), enemies.end());
+}
+
+void World::UpdateWeapons() {
+	for (int pid = 0; pid < MAX_PLAYERS; ++pid) {
+		ServerPlayer& p = players[pid];
+		if (!p.active || p.hp <= 0) {// 나갔거나 죽은 플레이어의 무기는 멈춘다
+			p.homing.active = false;
+			for (WeaponState& w : p.weapons)w.active = false;
+			continue;
+		}
+		UpdateSlash(pid);
+		UpdateCircle(pid);
+		UpdateBreath(pid);
+		UpdateSlow(pid);
+		UpdateHoming(pid);
+		ReapDeadEnemies();// 한 플레이어의 무기가 끝날 때마다 정리한다. 이미 죽은 적을 다음 플레이어가 또 때리지 않게
+	}
+}
+
+void World::UpdateSlash(int pid) {
+	ServerPlayer& p = players[pid];
+	WeaponState& w = p.weapons[WEAPON_SLASH];
+	StepWindow((int64_t)nowMs, w, WEAPON_DEFS[WEAPON_SLASH], [&]() {
+		const float ang = p.aimAngle;
+		const float cx = p.x + cosf(ang) * SLASH_OFFSET;// 사각형 중심은 플레이어 앞쪽
+		const float cy = p.y + sinf(ang) * SLASH_OFFSET;
+		IPoint poly[4];
+		for (int i = 0; i < 4; ++i) {
+			const float x = (i < 2 ? -SLASH_WIDTH / 2.0f : SLASH_WIDTH / 2.0f);
+			const float y = (i % 3 == 0 ? -SLASH_HEIGHT / 2.0f : SLASH_HEIGHT / 2.0f);
+			poly[i].x = (int)(cx + x * cosf(ang) - y * sinf(ang));
+			poly[i].y = (int)(cy + x * sinf(ang) + y * cosf(ang));
+		}
+		const int dmg = WeaponDamage(WEAPON_SLASH, w.level);
+		for (ServerEnemy& e : enemies) {
+			if (e.hp <= 0)continue;
+			if (RectPolygonCollision(poly, 4, e.x - SLASH_ENEMY_BOX_OFFSET, e.y - SLASH_ENEMY_BOX_OFFSET, SLASH_ENEMY_BOX_SIZE, SLASH_ENEMY_BOX_SIZE))
+				DamageEnemy(e, dmg, pid);
+		}
+	});
+}
+
+void World::UpdateCircle(int pid) {
+	ServerPlayer& p = players[pid];
+	WeaponState& w = p.weapons[WEAPON_CIRCLE];
+	StepAlways((int64_t)nowMs, w, WEAPON_DEFS[WEAPON_CIRCLE], [&]() {
+		const int dmg = WeaponDamage(WEAPON_CIRCLE, w.level);
+		for (ServerEnemy& e : enemies) {
+			if (e.hp <= 0)continue;
+			const float dx = e.x - p.x;
+			const float dy = e.y - p.y;
+			if (dx * dx + dy * dy <= CIRCLE_RADIUS * CIRCLE_RADIUS)DamageEnemy(e, dmg, pid);
+		}
+	});
+}
+
+void World::UpdateBreath(int pid) {
+	ServerPlayer& p = players[pid];
+	WeaponState& w = p.weapons[WEAPON_BREATH];
+	StepWindow((int64_t)nowMs, w, WEAPON_DEFS[WEAPON_BREATH], [&]() {
+		const int dmg = WeaponDamage(WEAPON_BREATH, w.level);
+		for (ServerEnemy& e : enemies) {
+			if (e.hp <= 0)continue;
+			const float dx = e.x - p.x;
+			const float dy = e.y - p.y;
+			if (dx * dx + dy * dy > BREATH_RADIUS * BREATH_RADIUS)continue;
+			// 조준 방향과 적 방향의 각도 차이 (0 ~ PI)
+			float diff = fabsf(fmodf(p.aimAngle - atan2f(dy, dx), 2.0f * PI_F));
+			if (diff > PI_F)diff = 2.0f * PI_F - diff;
+			if (diff <= BREATH_HALF_ANGLE)DamageEnemy(e, dmg, pid);
+		}
+	});
+}
+
+void World::UpdateSlow(int pid) {
+	ServerPlayer& p = players[pid];
+	WeaponState& w = p.weapons[WEAPON_SLOW];
+	StepAlways((int64_t)nowMs, w, WEAPON_DEFS[WEAPON_SLOW], [&]() {
+		for (ServerEnemy& e : enemies) {
+			const float dx = e.x - p.x;
+			const float dy = e.y - p.y;
+			if (dx * dx + dy * dy <= SLOW_RADIUS * SLOW_RADIUS)e.slowUntil = nowMs + SLOW_HOLD_MS;
+		}
+	});
+}
+
+int World::FindHomingTarget(const ServerPlayer& p) const {
+	// 그 플레이어 화면 안의 적만 노린다 (클라 카메라와 같은 계산)
+	const float camX = std::clamp(p.x - VIEW_WIDTH / 2.0f, 0.0f, (float)(MAP_WIDTH - VIEW_WIDTH));
+	const float camY = std::clamp(p.y - VIEW_HEIGHT / 2.0f, 0.0f, (float)(MAP_HEIGHT - VIEW_HEIGHT));
+	int best = -1;
+	int maxHp = -1;
+	float minDist = 0;
+	for (int i = 0; i < (int)enemies.size(); ++i) {
+		const ServerEnemy& e = enemies[i];
+		if (e.hp <= 0)continue;
+		if (e.x < camX || e.x > camX + VIEW_WIDTH || e.y < camY || e.y > camY + VIEW_HEIGHT)continue;
+		const float dist = sqrtf((p.x - e.x) * (p.x - e.x) + (p.y - e.y) * (p.y - e.y));
+		if (e.hp > maxHp) {// HP가 가장 높은 적
+			maxHp = e.hp;
+			best = i;
+			minDist = dist;
+		}
+		else if (e.hp == maxHp && dist < minDist) {// 같으면 가까운 적
+			best = i;
+			minDist = dist;
+		}
+	}
+	return best;
+}
+
+void World::UpdateHoming(int pid) {
+	ServerPlayer& p = players[pid];
+	WeaponState& w = p.weapons[WEAPON_HOMING];
+	HomingState& h = p.homing;
+	const WeaponDef& d = WEAPON_DEFS[WEAPON_HOMING];
+	if (w.level == 0) { h.active = false; return; }
+
+	// 쿨타임이 지났고 노릴 적이 있으면 발사. 쿨타임은 발사한 시각부터 센다
+	if (!h.active && (int64_t)nowMs - w.lastFireMs >= (int64_t)d.cooldownMs) {
+		const int idx = FindHomingTarget(p);
+		if (idx >= 0) {
+			h.active = true;
+			h.targetId = enemies[idx].id;
+			h.x = p.x;
+			h.y = p.y;
+			w.lastFireMs = (int64_t)nowMs;
+		}
+	}
+	if (!h.active)return;
+
+	ServerEnemy* target = nullptr;
+	for (ServerEnemy& e : enemies)
+		if (e.id == h.targetId && e.hp > 0) { target = &e; break; }
+	// 시간이 지났거나, 쫓던 적이 이미 다른 무기에 죽었으면 사라진다
+	if (!target || (int64_t)nowMs - w.lastFireMs >= (int64_t)d.durationMs) { h.active = false; return; }
+
+	const float dx = target->x - h.x;
+	const float dy = target->y - h.y;
+	const float len = sqrtf(dx * dx + dy * dy);
+	if (len > 0.1f) {
+		float step = HOMING_SPEED * TICK_MS / 1000.0f;
+		if (step > len)step = len;// 적을 지나쳐서 못 맞히는 일이 없게 (원작은 지나칠 수 있었다)
+		h.x += dx / len * step;
+		h.y += dy / len * step;
+	}
+	const float ex = target->x - h.x;
+	const float ey = target->y - h.y;
+	if (ex * ex + ey * ey <= HOMING_HIT_RADIUS * HOMING_HIT_RADIUS) {
+		DamageEnemy(*target, WeaponDamage(WEAPON_HOMING, w.level), pid);
+		h.active = false;
+	}
+}
+
 void World::Run() {
 	WaitForSingleObject(startEvent, INFINITE);// 게임 시작 신호를 기다림
 	if (!running)return;// 시작전에 서버가 꺼지면 종료
@@ -211,6 +474,7 @@ void World::Update(uint32_t dtMs) {
 	nowMs += dtMs;
 	++tick;
 	UpdatePlayers();
+	if (weaponsEnabled)UpdateWeapons();// 계획서 순서: 플레이어 이동 → 무기 처리 → 적 생성·이동 → 충돌·피해
 	SpawnEnemiesPerTick();
 	UpdateEnemies();
 	UpdateContactDamage();
@@ -225,8 +489,16 @@ void World::SendSnapshot() {
 		ps[i].x = (int16_t)lroundf(p.x);
 		ps[i].y = (int16_t)lroundf(p.y);
 		ps[i].hp = (int16_t)p.hp;
-		ps[i].level = 1;
+		ps[i].level = 1;// 레벨업은 11/25
+		ps[i].killCount = (uint16_t)(std::min)(p.killCount, 65535);
 		ps[i].aimAngle = p.aimAngle;
+		for (int w = 0; w < WEAPON_COUNT; ++w) {
+			ps[i].weaponLevel[w] = p.weapons[w].level;
+			if (p.weapons[w].active)ps[i].weaponActiveBits |= (uint8_t)(1u << w);// 지금 이펙트를 보여야 하는 무기
+		}
+		ps[i].homingActive = p.homing.active ? 1 : 0;
+		ps[i].homingX = (int16_t)lroundf(p.homing.x);
+		ps[i].homingY = (int16_t)lroundf(p.homing.y);
 	}
 
 	// 적을 보낼 형태로 변환
