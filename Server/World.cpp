@@ -106,11 +106,20 @@ void World::OnInput(int playerId, const C2S_Input& pkt) {
 	if (std::isfinite(pkt.aimAngle))p.aimAngle = pkt.aimAngle;// 이상한 값(NaN 등)이 오면 이전 조준을 유지
 }
 
-void World::OnSelectWeapon(int,const C2S_SelectWeapon&){}
+void World::OnSelectWeapon(int pid,const C2S_SelectWeapon& pkt){
+	if (pid < 0 || pid >= MAX_PLAYERS)return;
+	ServerPlayer& p = players[pid];
+	if (!p.active || !p.choosing)return;// 나갔거나 죽은 플레이어는 무기 선택 못함
+	if (pkt.cardIndex >= LEVELUP_CHOICES)return;
+	GrantWeapon(pid, p.choices[pkt.cardIndex]);
+	p.choosing = false;
+	TryStartLevelUp(pid);// 대기중인 레벨업이 있으면 다음 카드 선택 시작
+}
 void World::OnDisconnect(int playerId) {
 	if (playerId < 0 || playerId >= MAX_PLAYERS)return;
 	players[playerId].active = false;
 	players[playerId].hp = 0;	// 나간 플레이어는 사망 처리
+	players[playerId].choosing = false;
 }
 
 void World::SpawnPlayer() {
@@ -245,6 +254,7 @@ void World::UpdateContactDamage() {
 
 	for (ServerPlayer& p : players) {
 		if (!p.active || p.hp <= 0)continue;
+		if (p.choosing)continue;// 레벨업 카드를 고르는 동안은 무적
 		int hits = 0;
 		for (const ServerEnemy& e : enemies) {
 			float dx = p.x - e.x;
@@ -252,14 +262,14 @@ void World::UpdateContactDamage() {
 			if (dx * dx + dy * dy < CONTACT_DIST * CONTACT_DIST)++hits;
 		}
 		p.hp -= hits * CONTACT_DAMAGE;
-		if (p.hp < 0)p.hp = 0;// 사망·관전 처리는 12/3
+		if (p.hp < 0)p.hp = 0;// 사망·관전 처리는
 	}
 }
 
 void World::ResetWeapons(ServerPlayer& p) {
 	for (int w = 0; w < WEAPON_COUNT; ++w) {
 		p.weapons[w] = WeaponState{};
-		p.weapons[w].lastFireMs = (int64_t)nowMs - (int64_t)WEAPON_DEFS[w].cooldownMs;// 얻자마자 발동할 수 있다 (원작은 lastAttackTime = 0)
+		p.weapons[w].lastFireMs = (int64_t)nowMs - (int64_t)WEAPON_DEFS[w].cooldownMs;// 얻자마자 발동
 		p.weapons[w].lastTickMs = (int64_t)nowMs;
 	}
 	p.weapons[WEAPON_SLASH].level = 1;// 파리채는 처음부터 가지고 시작한다
@@ -271,13 +281,13 @@ void World::GrantWeapon(int playerId, int weaponType) {
 	if (weaponType < 0 || weaponType >= WEAPON_COUNT)return;
 	ServerPlayer& p = players[playerId];
 	WeaponState& w = p.weapons[weaponType];
-	if (w.level == 0) {// 처음 얻음: 바로 발동할 수 있게 시각을 맞춘다
+	if (w.level == 0) {
 		w.active = false;
 		w.lastFireMs = (int64_t)nowMs - (int64_t)WEAPON_DEFS[weaponType].cooldownMs;
 		w.lastTickMs = (int64_t)nowMs;
 		if (weaponType == WEAPON_HOMING)p.homing = HomingState{};
 	}
-	if (w.level < 255)++w.level;// 강화. 홈매트는 원작에서도 강화 효과가 없지만 레벨 표시는 올린다
+	if (w.level < 255)++w.level;// 강화
 }
 
 void World::DamageEnemy(ServerEnemy& e, int damage, int playerId) {
@@ -308,12 +318,20 @@ void World::UpdateWeapons() {
 			for (WeaponState& w : p.weapons)w.active = false;
 			continue;
 		}
+		if (p.choosing) {// 레벨업 카드를 고르는 동안은 공격하지 않는다 (소금총 탄도 사라진다)
+			p.homing.active = false;
+			for (WeaponState& w : p.weapons) {
+				w.active = false;
+				w.lastTickMs = (int64_t)nowMs;// 끝난 뒤 밀린 판정이 한꺼번에 들어가지 않게 판정 시각을 맞춰 둔다
+			}
+			continue;
+		}
 		UpdateSlash(pid);
 		UpdateCircle(pid);
 		UpdateBreath(pid);
 		UpdateSlow(pid);
 		UpdateHoming(pid);
-		ReapDeadEnemies();// 한 플레이어의 무기가 끝날 때마다 정리한다. 이미 죽은 적을 다음 플레이어가 또 때리지 않게
+		ReapDeadEnemies();// 한 플레이어의 무기가 끝날 때마다 정리 이미 죽은 적을 다음 플레이어가 또 때리지 않게
 	}
 }
 
@@ -492,7 +510,7 @@ void World::SendSnapshot() {
 		ps[i].x = (int16_t)lroundf(p.x);
 		ps[i].y = (int16_t)lroundf(p.y);
 		ps[i].hp = (int16_t)p.hp;
-		ps[i].level = 1;// 레벨업은 11/25
+		ps[i].level = (uint8_t)p.level;
 		ps[i].killCount = (uint16_t)(std::min)(p.killCount, 65535);
 		ps[i].aimAngle = p.aimAngle;
 		for (int w = 0; w < WEAPON_COUNT; ++w) {
@@ -603,4 +621,28 @@ void World::OnKill(int pid) {
 		++p.pendingLevelUps;
 		TryStartLevelUp(pid);
 	}
+}
+
+void World::TryStartLevelUp(int pid) {
+	ServerPlayer& p = players[pid];
+	if (p.choosing || p.pendingLevelUps <= 0)return;
+	--p.pendingLevelUps;
+	++p.level;
+	p.hp = PLAYER_MAX_HP;// 레벨업한 플레이어 체력 회복
+	
+	int pool[WEAPON_COUNT];
+	for (int i = 0;i < WEAPON_COUNT;i++)pool[i] = i;
+	std::shuffle(pool, pool + WEAPON_COUNT, rng);// 카드3장에 무기 중복으로 뜨지 않도록 셔플
+	for (int i = 0;i < LEVELUP_CHOICES;++i) p.choices[i] = (uint8_t)pool[i];
+	p.choosing = true;
+
+	SendLevelUp(pid);
+}
+
+void World::SendLevelUp(int pid) {
+	const ServerPlayer& p = players[pid];
+	S2C_LevelUp pkt{};
+	InitPacket(pkt, S2C_LEVEL_UP);
+	for (int i = 0;i < LEVELUP_CHOICES;++i)pkt.choices[i] = p.choices[i];
+	sendQ->Push(SendEvent{ (uint8_t)pid, false,ToBytes(pkt) });
 }
