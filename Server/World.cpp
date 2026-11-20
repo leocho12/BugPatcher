@@ -291,7 +291,10 @@ void World::ReapDeadEnemies() {
 	for (const ServerEnemy& e : enemies) {
 		if (e.hp > 0)continue;
 		any = true;
-		if (e.lastHitBy >= 0 && e.lastHitBy < MAX_PLAYERS)++players[e.lastHitBy].killCount;// 킬은 마지막으로 때린 플레이어에게
+		if (e.lastHitBy >= 0 && e.lastHitBy < MAX_PLAYERS){
+			++players[e.lastHitBy].killCount;// 킬은 마지막으로 때린 플레이어에게
+			OnKill(e.lastHitBy);
+		}
 	}
 	if (!any)return;
 	enemies.erase(std::remove_if(enemies.begin(), enemies.end(), [](const ServerEnemy& e) { return e.hp <= 0; }), enemies.end());
@@ -588,5 +591,16 @@ void World::ProcessRecvEvents() {
 				OnSelectWeapon(e.playerId, *reinterpret_cast<const C2S_SelectWeapon*>(h));
 			break;
 		}
+	}
+}
+
+void World::OnKill(int pid) {
+	ServerPlayer& p = players[pid];
+	if (!p.active)return;
+	if (p.level + p.pendingLevelUps >= MAX_LEVEL)return;//이미 만렙이거나 만렙 예정
+	if (++p.levelKills >= p.level * 5) {
+		p.levelKills = 0;
+		++p.pendingLevelUps;
+		TryStartLevelUp(pid);
 	}
 }
