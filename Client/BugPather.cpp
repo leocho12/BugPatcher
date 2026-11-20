@@ -184,12 +184,6 @@ void DrawMapSelectScreen(HDC hdc) {
 	DrawText(hdc, L"   기믹 맵 - 보유기믹 : CD, Fan", -1, &textBox2, DT_VCENTER | DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
 
 		// === 로비 정보 ===
-	// 맨 위: 내 번호와 닉네임
-	if (g_myId >= 0) {
-		wchar_t head[64];
-		swprintf_s(head, L"%s · %S", (g_myId == 0) ? L"1P" : L"2P", g_nickname);
-		TextOutW(hdc, startX, 90, head, lstrlenW(head));
-	}
 
 	// 1P가 고른 맵에 노란 테두리
 	if (g_selectedMap >= 0) {
@@ -203,18 +197,28 @@ void DrawMapSelectScreen(HDC hdc) {
 		DeleteObject(pen);
 	}
 
-	// 2P는 맵을 고를 수 없으니 버튼을 어둡게 덮는다
+	// 2P: 1P가 맵을 고르는 동안 화면 전체를 반투명 검정으로 덮고 가운데에 안내 문구
 	if (g_myId == 1) {
-		SolidBrush shade(Color(150, 0, 0, 0));	// 반투명 검정
-		graphics.FillRectangle(&shade, (INT)button1.left, (INT)button1.top,
-			(INT)(button1.right - button1.left), (INT)(button2.bottom - button1.top));
+		SolidBrush shade(Color(170, 0, 0, 0));	// 알파 170: 뒤 화면이 살짝 비침
+		graphics.FillRectangle(&shade, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+
+		SetTextColor(hdc, RGB(255, 255, 255));
+		HFONT bigFont = CreateFont(48, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+			DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+			DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+		HFONT prevFont = (HFONT)SelectObject(hdc, bigFont);
+		RECT mid = { 0, WINDOW_HEIGHT / 2 - 60, WINDOW_WIDTH, WINDOW_HEIGHT / 2 };
+		DrawTextW(hdc, L"1P가 맵을 선택하는 중...", -1, &mid, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+		SelectObject(hdc, prevFont);
+		DeleteObject(bigFont);
 	}
 
 
 	// 정리
 	DeleteObject(textBrush);
 	DeleteObject(btnBrush);
-	TextOutW(hdc, 100, 720, g_netStatus, lstrlenW(g_netStatus));
+	if (g_myId != 1)
+		TextOutW(hdc, 100, 720, g_netStatus, lstrlenW(g_netStatus));
 	SelectObject(hdc, oldFont);
 	DeleteObject(font);
 }
