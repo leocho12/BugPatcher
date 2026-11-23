@@ -1084,6 +1084,29 @@ float CalcAimAngle() {
 	return atan2f((float)(mousePos.y - screenPlayerY), (float)(mousePos.x - screenPlayerX));
 }
 
+void DrawWeaponEffects(Graphics& g, int sx, int sy, float angle, unsigned int activeBits) {
+	if (activeBits & (1u << WEAPON_SLOW)) {		// 홈매트: 플레이어 중심 원
+		slowGif.Draw(g, (int)(sx - SLOW_RADIUS), (int)(sy - SLOW_RADIUS),
+			(int)(SLOW_RADIUS * 2), (int)(SLOW_RADIUS * 2));
+	}
+	if (activeBits & (1u << WEAPON_CIRCLE)) {	// 전기장: 플레이어 중심 원
+		circleGif.Draw(g, (int)(sx - CIRCLE_RADIUS), (int)(sy - CIRCLE_RADIUS),
+			(int)(CIRCLE_RADIUS * 2), (int)(CIRCLE_RADIUS * 2));
+	}
+	if (activeBits & (1u << WEAPON_BREATH)) {	// 에프킬라: 조준 방향 앞쪽
+		breathGif.Draw(g,
+			(int)(sx + cosf(angle) * slashOffset - BREATH_RADIUS / 2),
+			(int)(sy + sinf(angle) * slashOffset - BREATH_RADIUS / 2),
+			(int)BREATH_RADIUS, (int)BREATH_RADIUS, angle);
+	}
+	if (activeBits & (1u << WEAPON_SLASH)) {	// 파리채: 조준 방향 앞쪽
+		slashGif.Draw(g,
+			(int)(sx + cosf(angle) * slashOffset - WEAPON_WIDTH / 2),
+			(int)(sy + sinf(angle) * slashOffset - WEAPON_HEIGHT / 2),
+			WEAPON_WIDTH, WEAPON_HEIGHT, angle);
+	}
+}
+
 void SendNetInput(HWND hwnd) {
 	if (g_autoMove) {
 		static const uint8_t pat[4] = { 1 << 3,1 << 2,1 << 1,1 << 0 };
@@ -1958,7 +1981,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			int x = mp.x;
 			int y = mp.y;
 
-			if (x >= 100 && x <= 400) {
+			if (x >= 100 && x <= 700) {
 				int mapId = -1;
 				if (y >= 150 && y <= 300) mapId = 0;		// 격자 맵
 				else if (y >= 340 && y <= 490) mapId = 1;	// 기믹 맵
@@ -2152,40 +2175,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		int screenX = playerPos.x - offsetX;
 		int screenY = playerPos.y - offsetY;
 
-		// === 무기 그리기 (GIF) ===
-		for (int i = 0; i < WEAPON_COUNT; ++i) {
-			Weapon& w = weapons[i];
-			if (!w.active) continue;
-			Graphics graphics(memDC);
+				// === 무기 그리기 (GIF) ===
+		// 서버 스냅샷의 무기 비트와 조준 각도로 나와 상대의 무기 이펙트를 그린다
+		if (hasNet) {
+			// GIF 프레임은 한 화면에 한 번만 넘긴다
+			slowGif.NextFrame();
+			circleGif.NextFrame();
+			breathGif.NextFrame();
+			slashGif.NextFrame();
 
-			if (w.type == WEAPON_SLASH) {
-				slashGif.NextFrame();
-				slashGif.Draw(graphics,
-					(int)(screenX + cosf(weaponAngle) * slashOffset - WEAPON_WIDTH / 2),
-					(int)(screenY + sinf(weaponAngle) * slashOffset - WEAPON_HEIGHT / 2),
-					WEAPON_WIDTH, WEAPON_HEIGHT, weaponAngle);
-			}
-			else if (w.type == WEAPON_CIRCLE) {
-				circleGif.NextFrame();
-				circleGif.Draw(graphics,
-					(int)(playerPos.x - CIRCLE_RADIUS - cameraX),
-					(int)(playerPos.y - CIRCLE_RADIUS - cameraY),
-					(int)(CIRCLE_RADIUS * 2), (int)(CIRCLE_RADIUS * 2));
-			}
-			else if (w.type == WEAPON_BREATH) {
-				breathGif.NextFrame();
-				// 브레스는 플레이어 앞쪽에 출력
-				breathGif.Draw(graphics,
-					(int)(screenX + cosf(weaponAngle) * slashOffset - BREATH_RADIUS / 2),
-					(int)(screenY + sinf(weaponAngle) * slashOffset - BREATH_RADIUS / 2),
-					BREATH_RADIUS, BREATH_RADIUS, weaponAngle);
-			}
-			else if (w.type == WEAPON_SLOW) {
-				slowGif.NextFrame();
-				slowGif.Draw(graphics,
-					(int)(playerPos.x - SLOW_RADIUS - cameraX),
-					(int)(playerPos.y - SLOW_RADIUS - cameraY),
-					(int)(SLOW_RADIUS * 2), (int)(SLOW_RADIUS * 2));
+			Graphics graphics(memDC);
+			for (int i = 0; i < NET_MAX_PLAYERS; ++i) {
+				const NetPlayerView& p = netPlayers[i];
+				if (p.hp <= 0) continue;	// 죽었거나 나간 플레이어는 이펙트도 그리지 않는다
+				DrawWeaponEffects(graphics, p.x - cameraX, p.y - cameraY, p.aimAngle, p.weaponActiveBits);
 			}
 		}
 		if (homingWeapon.active) {

@@ -7,6 +7,7 @@ struct NetPlayerView {
 	int x, y;
 	int hp;
 	float aimAngle;
+	unsigned int weaponActiveBits;	// 지금 이펙트를 보일 무기.
 };
 
 struct NetEnemyView {
