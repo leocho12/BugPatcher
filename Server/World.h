@@ -96,6 +96,7 @@ public:
 	// 무기 처리를 Update에 연결할지 여부. 11/20 2단계 확인(적) 이후에 true로 바꾼다.
 	// 꺼져 있으면 무기가 적을 죽이지 않아, 무기 이펙트가 아직 없는 클라 화면에서 적이 이유 없이 사라지지 않는다
 	bool weaponsEnabled = true;
+	bool bossesEnabled = false;
 private:
 	EventQueue<RecvEvent>* recvQ = nullptr;		
 	EventQueue<SendEvent>* sendQ = nullptr;		

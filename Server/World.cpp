@@ -775,6 +775,7 @@ void World::FireRing(const ServerBoss& b, float speed) {
 }
 
 void World::SpawnBosses() {
+	if (!bossesEnabled)return;
 	for (int type = BOSS_BASIC; type <= BOSS_DASH_AND_BULLET; ++type) {
 		ServerBoss& b = bosses[type - 1];
 		if (b.active || b.killed)continue;
