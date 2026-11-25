@@ -215,13 +215,17 @@ void World::SpawnEnemy() {
 }
 
 const ServerPlayer* World::PickTarget(const ServerEnemy& e) const {
+	return PickTargetAt(e.x, e.y);
+}
+
+const ServerPlayer* World::PickTargetAt(float x, float y) const {
 	const ServerPlayer* best = nullptr;
 	float bestDistSq = 0;
 	for (const ServerPlayer& p : players) {
 		if (!p.active || p.hp <= 0)continue;// 나갔거나 죽은 플레이어는 쫓지 않음
-		float dx = p.x - e.x;
-		float dy = p.y - e.y;
-		float distSq = dx * dx + dy * dy;// 크기 비교만 하므로 sqrt 생략
+		float dx = p.x - x;
+		float dy = p.y - y;
+		float distSq = dx * dx + dy * dy;
 		if (!best || distSq < bestDistSq) {
 			best = &p;
 			bestDistSq = distSq;
@@ -646,3 +650,4 @@ void World::SendLevelUp(int pid) {
 	for (int i = 0;i < LEVELUP_CHOICES;++i)pkt.choices[i] = p.choices[i];
 	sendQ->Push(SendEvent{ (uint8_t)pid, false,ToBytes(pkt) });
 }
+
