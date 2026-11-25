@@ -132,6 +132,8 @@ void World::SpawnPlayer() {
 	}
 	// 이전 판의 적이 남지 않게 초기화
 	enemies.clear();
+	for (ServerBoss& b : bosses)b = ServerBoss{};// 새 판은 보스도 처음부터
+	bullets.clear();
 	nextEnemyId = 1;
 	lastSpawnMs = nowMs;
 	lastContactMs = nowMs;
@@ -265,7 +267,14 @@ void World::UpdateContactDamage() {
 			float dy = p.y - e.y;
 			if (dx * dx + dy * dy < CONTACT_DIST * CONTACT_DIST)++hits;
 		}
-		p.hp -= hits * CONTACT_DAMAGE;
+		int bossDamage = 0;
+		for (const ServerBoss& b : bosses) {
+			if (!b.active)continue;
+			const float dx = p.x - b.x, dy = p.y - b.y;
+			const float reach = BOSS_RADIUS + PLAYER_RADIUS;
+			if (dx * dx + dy * dy <= reach * reach)bossDamage += BOSS_DEFS[b.type].contactDamage;
+		}
+		p.hp -= hits * CONTACT_DAMAGE + bossDamage;
 		if (p.hp < 0)p.hp = 0;// 사망·관전 처리는
 	}
 }
@@ -359,6 +368,11 @@ void World::UpdateSlash(int pid) {
 			if (RectPolygonCollision(poly, 4, e.x - SLASH_ENEMY_BOX_OFFSET, e.y - SLASH_ENEMY_BOX_OFFSET, SLASH_ENEMY_BOX_SIZE, SLASH_ENEMY_BOX_SIZE))
 				DamageEnemy(e, dmg, pid);
 		}
+		for (ServerBoss& b : bosses) {
+			if (!b.active || b.hp <= 0)continue;
+			if (RectPolygonCollision(poly, 4, b.x - BOSS_RADIUS, b.y - BOSS_RADIUS, BOSS_RADIUS * 2, BOSS_RADIUS * 2))
+				DamageBoss(b, dmg);
+		}
 	});
 }
 
@@ -372,6 +386,12 @@ void World::UpdateCircle(int pid) {
 			const float dx = e.x - p.x;
 			const float dy = e.y - p.y;
 			if (dx * dx + dy * dy <= CIRCLE_RADIUS * CIRCLE_RADIUS)DamageEnemy(e, dmg, pid);
+		}
+		for (ServerBoss& b : bosses) {
+			if (!b.active || b.hp <= 0)continue;
+			const float dx = b.x - p.x;
+			const float dy = b.y - p.y;
+			if (dx * dx + dy * dy <= CIRCLE_RADIUS * CIRCLE_RADIUS)DamageBoss(b, dmg);
 		}
 	});
 }
@@ -390,6 +410,16 @@ void World::UpdateBreath(int pid) {
 			float diff = fabsf(fmodf(p.aimAngle - atan2f(dy, dx), 2.0f * PI_F));
 			if (diff > PI_F)diff = 2.0f * PI_F - diff;
 			if (diff <= BREATH_HALF_ANGLE)DamageEnemy(e, dmg, pid);
+		}
+		for (ServerBoss& b : bosses) {
+			if (!b.active || b.hp <= 0)continue;
+			const float dx = b.x - p.x;
+			const float dy = b.y - p.y;
+			const float reach = BREATH_RADIUS + BOSS_RADIUS;
+			if (dx * dx + dy * dy > reach * reach)continue;
+			float diff = fabsf(fmodf(p.aimAngle - atan2f(dy, dx), 2.0f * PI_F));
+			if (diff > PI_F)diff = 2.0f * PI_F - diff;
+			if (diff <= BREATH_HALF_ANGLE)DamageBoss(b, dmg);
 		}
 	});
 }
@@ -431,6 +461,23 @@ int World::FindHomingTarget(const ServerPlayer& p) const {
 	return best;
 }
 
+int World::FindHomingBoss(const ServerPlayer& p) const {
+	const float camX = std::clamp(p.x - VIEW_WIDTH / 2.0f, 0.0f, (float)(MAP_WIDTH - VIEW_WIDTH));
+	const float camY = std::clamp(p.y - VIEW_HEIGHT / 2.0f, 0.0f, (float)(MAP_HEIGHT - VIEW_HEIGHT));
+	int best = -1;
+	int maxHp = -1;
+	for (int i = 0; i < 3; ++i) {
+		const ServerBoss& b = bosses[i];
+		if (!b.active || b.hp <= 0)continue;
+		if (b.x < camX || b.x > camX + VIEW_WIDTH || b.y < camY || b.y > camY + VIEW_HEIGHT)continue;
+		if (b.hp > maxHp) {
+			maxHp = b.hp;
+			best = i;
+		}
+	}
+	return best;
+}
+
 void World::UpdateHoming(int pid) {
 	ServerPlayer& p = players[pid];
 	WeaponState& w = p.weapons[WEAPON_HOMING];
@@ -438,12 +485,14 @@ void World::UpdateHoming(int pid) {
 	const WeaponDef& d = WEAPON_DEFS[WEAPON_HOMING];
 	if (w.level == 0) { h.active = false; return; }
 
-	// 쿨타임이 지났고 노릴 적이 있으면 발사. 쿨타임은 발사한 시각부터 센다
+	// 쿨타임이 지났고 노릴 대상이 있으면 발사. 화면 안에 보스가 있으면 보스를 먼저 노린다
 	if (!h.active && (int64_t)nowMs - w.lastFireMs >= (int64_t)d.cooldownMs) {
-		const int idx = FindHomingTarget(p);
-		if (idx >= 0) {
+		const int bossIdx = FindHomingBoss(p);
+		const int idx = (bossIdx >= 0) ? -1 : FindHomingTarget(p);
+		if (bossIdx >= 0 || idx >= 0) {
 			h.active = true;
-			h.targetId = enemies[idx].id;
+			h.bossIdx = (int8_t)bossIdx;// 보스가 없으면 -1
+			h.targetId = (bossIdx >= 0) ? 0 : enemies[idx].id;
 			h.x = p.x;
 			h.y = p.y;
 			w.lastFireMs = (int64_t)nowMs;
@@ -451,25 +500,39 @@ void World::UpdateHoming(int pid) {
 	}
 	if (!h.active)return;
 
+	// 쫓는 대상을 찾는다 (보스 또는 일반 적)
 	ServerEnemy* target = nullptr;
-	for (ServerEnemy& e : enemies)
-		if (e.id == h.targetId && e.hp > 0) { target = &e; break; }
-	// 시간이 지났거나, 쫓던 적이 이미 다른 무기에 죽었으면 사라진다
-	if (!target || (int64_t)nowMs - w.lastFireMs >= (int64_t)d.durationMs) { h.active = false; return; }
+	ServerBoss* bossTarget = nullptr;
+	if (h.bossIdx >= 0) {
+		ServerBoss& b = bosses[h.bossIdx];
+		if (b.active && b.hp > 0)bossTarget = &b;
+	}
+	else {
+		for (ServerEnemy& e : enemies)
+			if (e.id == h.targetId && e.hp > 0) { target = &e; break; }
+	}
+	// 시간이 지났거나, 쫓던 대상이 이미 다른 무기에 죽었으면 사라진다
+	if ((!target && !bossTarget) || (int64_t)nowMs - w.lastFireMs >= (int64_t)d.durationMs) { h.active = false; return; }
 
-	const float dx = target->x - h.x;
-	const float dy = target->y - h.y;
+	const float tx = bossTarget ? bossTarget->x : target->x;
+	const float ty = bossTarget ? bossTarget->y : target->y;
+	const float dx = tx - h.x;
+	const float dy = ty - h.y;
 	const float len = sqrtf(dx * dx + dy * dy);
 	if (len > 0.1f) {
 		float step = HOMING_SPEED * TICK_MS / 1000.0f;
-		if (step > len)step = len;// 적을 지나쳐서 못 맞히는 일이 없게 (원작은 지나칠 수 있었다)
+		if (step > len)step = len;// 대상을 지나쳐서 못 맞히는 일이 없게 (원작은 지나칠 수 있었다)
 		h.x += dx / len * step;
 		h.y += dy / len * step;
 	}
-	const float ex = target->x - h.x;
-	const float ey = target->y - h.y;
-	if (ex * ex + ey * ey <= HOMING_HIT_RADIUS * HOMING_HIT_RADIUS) {
-		DamageEnemy(*target, WeaponDamage(WEAPON_HOMING, w.level), pid);
+	// 보스는 몸집이 커서(반지름 64) 중심이 아니라 가장자리에 닿으면 맞은 것으로 한다
+	const float hitR = HOMING_HIT_RADIUS + (bossTarget ? BOSS_RADIUS : 0.0f);
+	const float ex = tx - h.x;
+	const float ey = ty - h.y;
+	if (ex * ex + ey * ey <= hitR * hitR) {
+		const int dmg = WeaponDamage(WEAPON_HOMING, w.level);
+		if (bossTarget)DamageBoss(*bossTarget, dmg);
+		else DamageEnemy(*target, dmg, pid);
 		h.active = false;
 	}
 }
@@ -499,9 +562,13 @@ void World::Update(uint32_t dtMs) {
 	nowMs += dtMs;
 	++tick;
 	UpdatePlayers();
-	if (weaponsEnabled)UpdateWeapons();// 계획서 순서: 플레이어 이동 → 무기 처리 → 적 생성·이동 → 충돌·피해
+	if (weaponsEnabled)UpdateWeapons();
+	ReapDeadBosses();// 무기로 죽은 보스 처리 (무기가 꺼져 있어도 부름)
 	SpawnEnemiesPerTick();
 	UpdateEnemies();
+	SpawnBosses();
+	UpdateBosses();
+	UpdateBossBullets();
 	UpdateContactDamage();
 	SendSnapshot();
 }
@@ -538,10 +605,31 @@ void World::SendSnapshot() {
 		es.push_back(s);
 	}
 
+	std::vector<BossState> bs;
+	for (const ServerBoss& b : bosses) {
+		if (!b.active)continue;
+		BossState s{};
+		s.type = b.type;
+		s.x = (int16_t)lroundf(b.x);
+		s.y = (int16_t)lroundf(b.y);
+		s.hp = (int16_t)(std::max)(b.hp, 0);
+		s.maxHp = (int16_t)b.maxHp;
+		s.aoeStep = b.aoeStep;
+		bs.push_back(s);
+	}
+	std::vector<BulletState> bl;
+	bl.reserve(bullets.size());
+	for (const ServerBullet& b : bullets) {
+		BulletState s{};
+		s.x = (int16_t)lroundf(b.x);
+		s.y = (int16_t)lroundf(b.y);
+		bl.push_back(s);
+	}
+
 	// 조각 하나에 들어가는 적 수 = (1400 - 고정 부분) / 적 1마리 크기
 	const size_t fixedBytes = sizeof(S2C_SnapshotHead) + sizeof(ps) + sizeof(uint16_t);// 머리 + 플레이어 + 적 수
 	const size_t extra0 = sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint8_t);// 0번 조각만: 보스, 탄막, 기믹 수
-	const size_t perFrag0 = (MAX_UDP_SIZE - fixedBytes - extra0) / sizeof(EnemyState);
+	const size_t perFrag0 = (MAX_UDP_SIZE - fixedBytes - extra0- bs.size() * sizeof(BossState) - bl.size() * sizeof(BulletState)) / sizeof(EnemyState);
 	const size_t perFrag = (MAX_UDP_SIZE - fixedBytes) / sizeof(EnemyState);
 
 	size_t fragCount = 1;
@@ -557,10 +645,12 @@ void World::SendSnapshot() {
 		};
 
 		put(ps, sizeof(ps));// 모든 조각에 같은 플레이어 정보
-		if (f == 0) {// 0번 조각만 보스, 탄막, 기믹 (지금은 전부 0개)
-			uint8_t bossCount = 0;		put(&bossCount, sizeof(bossCount));
-			uint16_t bulletCount = 0;	put(&bulletCount, sizeof(bulletCount));
-			uint8_t gimmickCount = 0;	put(&gimmickCount, sizeof(gimmickCount));
+		if (f == 0) {// 0번 조각만 보스, 탄막, 기믹
+			uint8_t bossCount = (uint8_t)bs.size();		put(&bossCount, sizeof(bossCount));
+			if (!bs.empty())put(bs.data(), bs.size() * sizeof(BossState));
+			uint16_t bulletCount = (uint16_t)bl.size();	put(&bulletCount, sizeof(bulletCount));
+			if (!bl.empty())put(bl.data(), bl.size() * sizeof(BulletState));
+			uint8_t gimmickCount = 0;					put(&gimmickCount, sizeof(gimmickCount));
 		}
 
 		size_t room = (f == 0) ? perFrag0 : perFrag;
@@ -651,3 +741,172 @@ void World::SendLevelUp(int pid) {
 	sendQ->Push(SendEvent{ (uint8_t)pid, false,ToBytes(pkt) });
 }
 
+namespace {
+	// 선분 a->b 가 원(c, 반지름 r)에 닿는지. 보스2의 고속탄은 한 틱에 62px를 가서 지름(48px)보다 멀어 점 검사만 하면 지나쳐 버린다
+	bool SegHitsCircle(float ax, float ay, float bx, float by, float cx, float cy, float r) {
+		float dx = bx - ax, dy = by - ay;
+		float len2 = dx * dx + dy * dy;
+		float t = len2 > 0 ? ((cx - ax) * dx + (cy - ay) * dy) / len2 : 0.0f;
+		t = (std::max)(0.0f, (std::min)(1.0f, t));
+		float px = ax + dx * t - cx, py = ay + dy * t - cy;
+		return px * px + py * py <= r * r;
+	}
+}
+
+void World::BroadcastBossAlert(uint8_t bossType) {
+	S2C_BossAlert pkt{};
+	InitPacket(pkt, S2C_BOSS_ALERT);
+	pkt.bossType = bossType;
+	sendQ->Push(SendEvent{ TARGET_ALL, false, ToBytes(pkt) });// false=TCP
+}
+
+void World::AddBullet(float x, float y, float vx, float vy) {
+	if (bullets.size() >= MAX_BOSS_BULLETS)return;// 스냅샷 크기 보호
+	ServerBullet b;
+	b.x = x; b.y = y; b.vx = vx; b.vy = vy;
+	bullets.push_back(b);
+}
+
+void World::FireRing(const ServerBoss& b, float speed) {
+	for (int i = 0; i < RING_COUNT; ++i) {
+		float angle = i * 2.0f * PI_F / RING_COUNT;
+		AddBullet(b.x, b.y, cosf(angle) * speed, sinf(angle) * speed);
+	}
+}
+
+void World::SpawnBosses() {
+	for (int type = BOSS_BASIC; type <= BOSS_DASH_AND_BULLET; ++type) {
+		ServerBoss& b = bosses[type - 1];
+		if (b.active || b.killed)continue;
+		if (nowMs <= BOSS_DEFS[type].spawnAtMs)continue;
+		const ServerPlayer* t = PickTargetAt(MAP_WIDTH / 2.0f, MAP_HEIGHT / 2.0f);
+		if (!t)return;// 살아있는 플레이어가 없으면 나오지 않는다
+
+		b = ServerBoss{};
+		b.active = true;
+		b.type = (uint8_t)type;
+		b.x = (std::max)(0.0f, (std::min)((float)MAP_WIDTH, t->x + 200.0f));// 원작: 플레이어 +(200, -100)
+		b.y = (std::max)(0.0f, (std::min)((float)MAP_HEIGHT, t->y - 100.0f));
+		b.hp = b.maxHp = BOSS_DEFS[type].hp;
+		b.lastAttackMs = b.lastDashMs = b.aoeLastMs = (int64_t)nowMs;// 첫 공격은 등장 후 주기가 지난 뒤
+		BroadcastBossAlert((uint8_t)type);
+	}
+}
+
+void World::UpdateBosses() {
+	const float dt = TICK_MS / 1000.0f;
+	const int64_t now = (int64_t)nowMs;
+	for (ServerBoss& b : bosses) {
+		if (!b.active)continue;
+		const ServerPlayer* t = PickTargetAt(b.x, b.y);
+		if (!t)continue;// 쫓을 플레이어가 없으면 모든 행동을 쉰다
+		const BossDef& d = BOSS_DEFS[b.type];
+
+		// 기본 이동: 가장 가까운 플레이어를 쫓는다
+		const float dx = t->x - b.x, dy = t->y - b.y;
+		const float len = sqrtf(dx * dx + dy * dy);
+		if (len > 0.1f) {
+			const float step = (std::min)(d.speed * dt, len);
+			b.x += dx / len * step;
+			b.y += dy / len * step;
+		}
+
+		// 탄막
+		if (b.type == BOSS_BASIC && now - b.lastAttackMs >= (int64_t)RING_INTERVAL_1) {
+			b.lastAttackMs = now;
+			FireRing(b, RING_SPEED);// 8방향
+		}
+		if (b.type == BOSS_DASH_SHOOT && now - b.lastAttackMs >= (int64_t)AIM_INTERVAL) {
+			b.lastAttackMs = now;
+			if (len > 0.0f)AddBullet(b.x, b.y, dx / len * AIM_SPEED, dy / len * AIM_SPEED);// 플레이어 방향 1발
+		}
+		if (b.type == BOSS_DASH_AND_BULLET && now - b.lastAttackMs >= (int64_t)RING_INTERVAL_3) {
+			b.lastAttackMs = now;
+			FireRing(b, RING_SPEED);
+		}
+
+		// 돌진 (보스2, 보스3). 평소 이동에 더해서 움직인다
+		if (b.type != BOSS_BASIC) {
+			if (!b.dashing && now - b.lastDashMs >= (int64_t)DASH_INTERVAL) {
+				b.lastDashMs = now;
+				b.dashStartMs = now;
+				b.dashing = true;
+				if (len > 0.0f) { b.dashDx = dx / len; b.dashDy = dy / len; }
+			}
+			if (b.dashing) {
+				b.x += b.dashDx * DASH_SPEED * dt;
+				b.y += b.dashDy * DASH_SPEED * dt;
+				if (now - b.dashStartMs >= (int64_t)DASH_DURATION)b.dashing = false;
+			}
+		}
+
+		// 광역 공격 (보스3): 5초마다 3단계, 300ms 간격, 반경 150 -> 200 -> 250
+		if (b.type == BOSS_DASH_AND_BULLET) {
+			if (b.aoeStep == 0 && now - b.aoeLastMs >= (int64_t)AOE_COOLDOWN) {
+				b.aoeStep = 1;
+				b.aoeTickMs = now;
+			}
+			if (b.aoeStep > 0 && now - b.aoeTickMs >= (int64_t)AOE_STEP_MS) {
+				b.aoeTickMs = now;
+				const float range = (float)(AOE_BASE + (b.aoeStep - 1) * AOE_GROW);
+				for (ServerPlayer& p : players) {
+					if (!p.active || p.hp <= 0 || p.choosing)continue;// 레벨업 카드를 고르는 동안은 무적
+					const float px = p.x - b.x, py = p.y - b.y;
+					if (px * px + py * py <= range * range) {
+						p.hp -= AOE_DAMAGE;
+						if (p.hp < 0)p.hp = 0;
+					}
+				}
+				if (++b.aoeStep > AOE_STEPS) {
+					b.aoeStep = 0;
+					b.aoeLastMs = now;
+				}
+			}
+		}
+	}
+}
+
+void World::UpdateBossBullets() {
+	const float dt = TICK_MS / 1000.0f;
+	const float hitR = PLAYER_RADIUS + BULLET_RADIUS;
+	for (size_t i = 0; i < bullets.size(); ) {
+		ServerBullet& b = bullets[i];
+		const float px = b.x, py = b.y;// 이동 전 위치
+		b.x += b.vx * dt;
+		b.y += b.vy * dt;
+
+		bool remove = false;
+		for (ServerPlayer& p : players) {
+			if (!p.active || p.hp <= 0 || p.choosing)continue;
+			if (SegHitsCircle(px, py, b.x, b.y, p.x, p.y, hitR)) {
+				p.hp -= BULLET_DAMAGE;
+				if (p.hp < 0)p.hp = 0;
+				remove = true;
+				break;
+			}
+		}
+		if (b.x < 0 || b.x > MAP_WIDTH || b.y < 0 || b.y > MAP_HEIGHT)remove = true;
+		if (remove) {
+			bullets[i] = bullets.back();// 순서는 상관없으니 마지막 것으로 덮어쓰고 줄인다
+			bullets.pop_back();
+		}
+		else ++i;
+	}
+}
+
+void World::DamageBoss(ServerBoss& b, int damage) {
+	if (damage <= 0)return;
+	b.hp -= damage;// 보스는 킬 수에 포함되지 않는다 (원작과 같음)
+}
+
+void World::ReapDeadBosses() {
+	for (ServerBoss& b : bosses) {
+		if (!b.active || b.hp > 0)continue;
+		b.active = false;
+		b.killed = true;
+		b.dashing = false;
+		b.aoeStep = 0;
+		for (ServerPlayer& p : players)
+			if (p.active && p.hp > 0)p.hp = PLAYER_MAX_HP;// 원작: 보스를 잡으면 HP 회복
+	}
+}

@@ -24,6 +24,7 @@ struct HomingState {
 	bool active = false;
 	float x = 0, y = 0;
 	uint16_t targetId = 0;// 쫓는 적의 id (적이 지워져도 밀리지 않게 번호 대신 id로 찾는다)
+	int8_t bossIdx = -1;// 0~2면 bosses[bossIdx]를 쫓는 중, -1이면 targetId의 일반 적을 쫓는 중
 };
 
 // 서버가 들고있는 플레이어 1명의 상태
@@ -62,7 +63,7 @@ struct ServerBoss {
 	int maxHp = 0;
 	int64_t lastAttackMs = 0;// 마지막으로 공격한 게임 시간
 	int64_t lastDashMs = 0;// 마지막으로 돌진한 게임 시간
-	int64_t dashStaratMs = 0;// 돌진 시작 게임 시간
+	int64_t dashStartMs = 0;// 돌진 시작 게임 시간
 	bool dashing = false;// 돌진 중인지
 	float dashDx = 0, dashDy = 0;
 	uint8_t aoeStep = 0;// 현재 AOE 단계
@@ -119,6 +120,7 @@ private:
 	void UpdateSlow(int playerId);// 홈매트
 	void UpdateHoming(int playerId);// 소금총
 	int FindHomingTarget(const ServerPlayer& p) const;// 소금총이 노릴 적: 화면 안에서 HP가 가장 높은 적(같으면 가까운 적)의 번호, 없으면 -1
+	int FindHomingBoss(const ServerPlayer& p) const;// 소금총이 노릴 보스: 화면 안에서 HP가 가장 높은 보스의 번호, 없으면 -1
 	void SpawnBosses();// 정해진 시각이 되면 보스 등장 + 알림
 	void UpdateBosses();// 보스 이동, 탄막, 돌진, 광역 공격
 	void UpdateBossBullets();// 보스 탄 이동과 플레이어 충돌
@@ -138,6 +140,4 @@ private:
 	uint32_t tick = 0;// 스냅샷 번호
 	std::atomic<bool> running{ true };
 	std::vector<RecvEvent> recvBuf;
-	ServerBoss bosses[3];// 보스 3마리 상태
-	std::vector<ServerBullet> bullets;// 보스가 쏜 탄
 };
