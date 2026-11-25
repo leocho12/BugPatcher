@@ -17,6 +17,11 @@ bool NetGetState(NetPlayerView players[NET_MAX_PLAYERS], std::vector<NetEnemyVie
 		players[i].hp = snap.player[i].hp;
 		players[i].aimAngle = snap.player[i].aimAngle;
 		players[i].weaponActiveBits = snap.player[i].weaponActiveBits;
+		players[i].level = snap.player[i].level;
+		players[i].killCount = snap.player[i].killCount;
+		players[i].homingActive = snap.player[i].homingActive != 0;
+		players[i].homingX = snap.player[i].homingX;
+		players[i].homingY = snap.player[i].homingY;
 	}
 
 	enemies.clear();

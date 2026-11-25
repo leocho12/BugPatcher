@@ -1107,6 +1107,15 @@ void DrawWeaponEffects(Graphics& g, int sx, int sy, float angle, unsigned int ac
 	}
 }
 
+
+// 서버가 보낸 누적 킬 수를 "지금 레벨에서 잡은 수"로 바꾼다 (경험치 바용)
+int CalcLevelKills(int level, int totalKills) {
+	int kills = totalKills - 5 * level * (level - 1) / 2;
+	if (kills < 0) kills = 0;
+	if (kills > level * 5) kills = level * 5;	// 카드 선택 대기 중이거나 만렙이면 바를 꽉 채운다
+	return kills;
+}
+
 void SendNetInput(HWND hwnd) {
 	if (g_autoMove) {
 		static const uint8_t pat[4] = { 1 << 3,1 << 2,1 << 1,1 << 0 };
@@ -2119,6 +2128,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			playerPos.y = netPlayers[g_myId].y;
 			playerHP = (std::max)(netPlayers[g_myId].hp, 0);	// 음수면 체력 바가 거꾸로 그려지므로 0으로
 			UpdateCamera();
+			// 레벨·경험치: 원작의 레벨 텍스트와 경험치 바(DrawExpBar)가 읽는 전역을 스냅샷 값으로 바꾼다
+			playerLevel = netPlayers[g_myId].level;
+			killCount = CalcLevelKills(netPlayers[g_myId].level, netPlayers[g_myId].killCount);
 
 			// 적: 원작 그리기 코드가 읽는 전역 enemies를 스냅샷 값으로 바꾼다
 			enemies.clear();
@@ -2191,13 +2203,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				DrawWeaponEffects(graphics, p.x - cameraX, p.y - cameraY, p.aimAngle, p.weaponActiveBits);
 			}
 		}
-		if (homingWeapon.active) {
-			int x = (int)(homingWeapon.x - cameraX);
-			int y = (int)(homingWeapon.y - cameraY);
-
+			// 소금총 탄: 서버가 보낸 탄 위치에 나와 상대의 탄을 보라색 원으로 그린다
+		if (hasNet) {
 			HBRUSH hBrush = CreateSolidBrush(RGB(255, 0, 255));  // 보라색
 			HBRUSH oldBrush = (HBRUSH)SelectObject(memDC, hBrush);
-			Ellipse(memDC, x - 10, y - 10, x + 10, y + 10);
+			for (int i = 0; i < NET_MAX_PLAYERS; ++i) {
+				const NetPlayerView& p = netPlayers[i];
+				if (!p.homingActive) continue;	// 죽음·접속 끊김·카드 선택 중이면 서버가 꺼서 보낸다
+				int x = p.homingX - cameraX;
+				int y = p.homingY - cameraY;
+				Ellipse(memDC, x - 10, y - 10, x + 10, y + 10);
+			}
 			SelectObject(memDC, oldBrush);
 			DeleteObject(hBrush);
 		}
