@@ -53,5 +53,8 @@
     <ClInclude Include="Server.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+    <ClInclude Include="BossDef.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

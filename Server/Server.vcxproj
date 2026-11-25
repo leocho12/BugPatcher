@@ -151,6 +151,7 @@
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="BossDef.h" />
     <ClInclude Include="EventQueue.h" />
     <ClInclude Include="Events.h" />
     <ClInclude Include="Server.h" />
