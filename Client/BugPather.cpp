@@ -513,8 +513,6 @@ void DrawWeaponSelectionUI(HDC hdc) {
 		CLEARTYPE_QUALITY, VARIABLE_PITCH, TEXT("Segoe UI"));
 	HFONT oldFont = (HFONT)SelectObject(hdc, hFont);
 
-	Graphics graphics(hdc);
-
 	for (int i = 0; i < 3; ++i) {
 		POINT origin = GetWeaponCardOrigin(i);
 		int x = origin.x;
@@ -541,6 +539,7 @@ void DrawWeaponSelectionUI(HDC hdc) {
 		// === 이미지 출력 ===
 		Image* weaponImg = weaponImages[weaponChoices[i]];
 		if (weaponImg) {
+			Graphics graphics(hdc);
 			graphics.DrawImage(weaponImg, imgX, imgY, imgSize, imgSize);
 		}
 
@@ -1942,6 +1941,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		break;
 
 
+	case WM_NET_LEVEL_UP:	// 서버가 고른 무기 후보 3개로 카드 화면을 연다
+		for (int i = 0; i < 3; ++i)
+			weaponChoices[i] = (int)((wParam >> (8 * i)) & 0xFF);
+		selectedWeapon = -1;
+		isChoosingWeapon = true;
+		InvalidateRect(hwnd, NULL, FALSE);
+		break;
+
 	case WM_NET_DISCONNECTED:
 		g_net.Close();
 		g_udp.Stop();
@@ -1949,6 +1956,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		g_myId = -1;
 		g_mapSent = false;
 		g_selectedMap = -1;
+		isChoosingWeapon = false;
 		enemies.clear();	
 		KillTimer(hwnd, TIMER_NET_INPUT);
 		KillTimer(hwnd, TIMER_NET_RENDER);
@@ -2013,59 +2021,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				RECT r = GetWeaponCardRect(i);  // 화면에 그려진 카드 전체 영역
 
 				if (mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom) {
-					selectedWeapon = i;
-					int type = weaponChoices[i];
-
-					// 무기 데미지 강화 or 활성화 처리
-					switch (type) {
-					case WEAPON_SLASH:
-						// 강화: 쿨타임 감소 또는 데미지 증가
-						weapons[WEAPON_SLASH].damage += 2;
-						break;
-
-					case WEAPON_BREATH:
-						if (!isBreathEnabled) {
-							SetTimer(hwnd, 13, 100, (TIMERPROC)TimerProc);  // 브레스 무기 충돌 체크 (0.1초마다)
-							weapons[WEAPON_BREATH].damage = 5;
-							isBreathEnabled = true;
-						}
-						else {
-							weapons[WEAPON_BREATH].damage++;
-						}
-						break;
-
-					case WEAPON_CIRCLE:
-						if (!isCircleEnabled) {
-							SetTimer(hwnd, 12, 100, (TIMERPROC)TimerProc); // circle 타이머
-							weapons[WEAPON_CIRCLE].active = true;
-							isCircleEnabled = true;
-						}
-						else {
-							weapons[WEAPON_CIRCLE].damage++;
-						}
-						break;
-
-					case WEAPON_SLOW:
-						if (!isSlowEnabled) {
-							SetTimer(hwnd, 14, 16, (TIMERPROC)TimerProc);  // 슬로우 무기 주기 (0.1초 간격)
-							weapons[WEAPON_SLOW].active = true;
-							isSlowEnabled = true;
-						}
-						break;
-
-					case WEAPON_COUNT:  // Homing Weapon
-						if (!isHomingEnabled) {
-							SetTimer(hwnd, 15, 16, (TIMERPROC)TimerProc);  // 스나이퍼 무기 약 60FPS
-							homingWeapon.damage = 10;
-							isHomingEnabled = true;
-						}
-						else {
-							homingWeapon.damage++;
-						}
-						break;
-					}
+					// 무기 강화는 서버가 한다. 클라는 몇 번째 카드를 골랐는지만 보낸다
+					g_net.SendSelectWeapon((uint8_t)i);
 					isChoosingWeapon = false;
 					selectedWeapon = -1;
+					InvalidateRect(hwnd, NULL, FALSE);
 					break;
 				}
 			}
@@ -2203,7 +2163,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				DrawWeaponEffects(graphics, p.x - cameraX, p.y - cameraY, p.aimAngle, p.weaponActiveBits);
 			}
 		}
-			// 소금총 탄: 서버가 보낸 탄 위치에 나와 상대의 탄을 보라색 원으로 그린다
+		// 소금총 탄: 서버가 보낸 탄 위치에 나와 상대의 탄을 보라색 원으로 그린다
 		if (hasNet) {
 			HBRUSH hBrush = CreateSolidBrush(RGB(255, 0, 255));  // 보라색
 			HBRUSH oldBrush = (HBRUSH)SelectObject(memDC, hBrush);

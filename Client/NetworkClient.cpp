@@ -133,6 +133,13 @@ void NetworkClient::HandlePacket(const PacketHeader* pkt) {
 			PostMessage(hwnd, WM_NET_GAME_START, p->mapId, 0);
 		}
 		break;
+	case S2C_LEVEL_UP:
+		if (pkt->size == sizeof(S2C_LevelUp)) {
+			const S2C_LevelUp* p = reinterpret_cast<const S2C_LevelUp*>(pkt);
+			WPARAM choices = p->choices[0] | (p->choices[1] << 8) | (p->choices[2] << 16);
+			PostMessage(hwnd, WM_NET_LEVEL_UP, choices, 0);
+		}
+		break;
 	}
 
 }
