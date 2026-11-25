@@ -7,6 +7,7 @@
 #include "EventQueue.h"
 #include "Events.h"
 #include "WeaponDef.h"
+#include "BossDef.h"
 struct C2S_Input;
 struct C2S_SelectWeapon;
 
@@ -53,6 +54,23 @@ struct ServerEnemy {
 	int8_t lastHitBy = -1;// 마지막으로 때린 플레이어 번호. 죽으면 그 플레이어가 킬을 얻는다
 };
 
+struct ServerBoss {
+	bool active = false, killed = false;
+	uint8_t type = 0;
+	float x = 0, y = 0;
+	int hp = 0;
+	int maxHp = 0;
+	int64_t lastAttackMs = 0;// 마지막으로 공격한 게임 시간
+	int64_t lastDashMs = 0;// 마지막으로 돌진한 게임 시간
+	int64_t dashStaratMs = 0;// 돌진 시작 게임 시간
+	bool dashing = false;// 돌진 중인지
+	float dashDx = 0, dashDy = 0;
+	uint8_t aoeStep = 0;// 현재 AOE 단계
+	int64_t aoeLastMs = 0;// 마지막으로 AOE 판정한 게임 시간
+	int64_t aoeTickMs = 0;// 마지막으로 AOE 단계가 바뀐 게임 시간
+};
+struct ServerBullet { float x, y, vx, vy; };
+
 class World {
 public:
 	void Init(EventQueue<RecvEvent>* recvQ, EventQueue<SendEvent>* sendQ,
@@ -71,6 +89,7 @@ public:
 	void Update(uint32_t dtMs);// 한 틱 시뮬레이션
 	void SendSnapshot();// 현재 상태를 S2C_SNAPSHOT으로 만들어 송신 큐에 넣음
 	void BroadcastGameStart();// 시작 위치를 정한 뒤 S2C_GAME_START를 두 클라에 보냄
+	void BroadcastBossAlert(uint8_t bossType);// 보스 등장을 두 클라에 알림
 	void Stop(){ running = false; }// 서버 종료시 메인이 호출
 
 	// 무기 처리를 Update에 연결할지 여부. 11/20 2단계 확인(적) 이후에 true로 바꾼다.
@@ -86,6 +105,7 @@ private:
 	void ProcessRecvEvents();
 	void SpawnEnemy();// 적 1마리 생성
 	const ServerPlayer* PickTarget(const ServerEnemy& e) const;// 적이 쫓아갈 플레이어
+	const ServerPlayer* PickTargetAt(float x, float y) const;// 이 좌표에서 가장 가까운 살아있는 플레이어
 
 	void ResetWeapons(ServerPlayer& p);// 게임 시작 시 무기 초기화 (파리채 1레벨만 가지고 시작)
 	void DamageEnemy(ServerEnemy& e, int damage, int playerId);// 피해를 주고 마지막으로 때린 플레이어를 기록
@@ -99,9 +119,18 @@ private:
 	void UpdateSlow(int playerId);// 홈매트
 	void UpdateHoming(int playerId);// 소금총
 	int FindHomingTarget(const ServerPlayer& p) const;// 소금총이 노릴 적: 화면 안에서 HP가 가장 높은 적(같으면 가까운 적)의 번호, 없으면 -1
+	void SpawnBosses();// 정해진 시각이 되면 보스 등장 + 알림
+	void UpdateBosses();// 보스 이동, 탄막, 돌진, 광역 공격
+	void UpdateBossBullets();// 보스 탄 이동과 플레이어 충돌
+	void DamageBoss(ServerBoss& b, int damage);
+	void ReapDeadBosses();// HP 0 이하 보스 처리 + 생존 플레이어 HP 회복
+	void AddBullet(float x, float y, float vx, float vy);
+	void FireRing(const ServerBoss& b, float speed);// 8방향 탄막
 
 	std::vector<ServerEnemy> enemies;
 	uint16_t nextEnemyId = 1;
+	ServerBoss bosses[3];
+	std::vector<ServerBullet> bullets;
 	uint64_t lastSpawnMs = 0;// 마지막으로 적을 만든 게임 시간
 	uint64_t lastContactMs = 0;// 마지막 접촉 판정 게임 시간
 	std::mt19937 rng{ std::random_device{}() };// 월드 스레드만 사용
@@ -109,4 +138,6 @@ private:
 	uint32_t tick = 0;// 스냅샷 번호
 	std::atomic<bool> running{ true };
 	std::vector<RecvEvent> recvBuf;
+	ServerBoss bosses[3];// 보스 3마리 상태
+	std::vector<ServerBullet> bullets;// 보스가 쏜 탄
 };
