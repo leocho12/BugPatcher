@@ -134,6 +134,8 @@ void World::SpawnPlayer() {
 	enemies.clear();
 	for (ServerBoss& b : bosses)b = ServerBoss{};// 새 판은 보스도 처음부터
 	bullets.clear();
+	gimmicks.clear();
+	lastCDSpawnMs = lastFanSpawnMs = nowMs;// 첫 기믹은 시작 8초 뒤
 	nextEnemyId = 1;
 	lastSpawnMs = nowMs;
 	lastContactMs = nowMs;
@@ -569,6 +571,8 @@ void World::Update(uint32_t dtMs) {
 	SpawnBosses();
 	UpdateBosses();
 	UpdateBossBullets();
+	CheckGimmick();
+	UpdateGimmicks();
 	UpdateContactDamage();
 	SendSnapshot();
 }
@@ -625,11 +629,21 @@ void World::SendSnapshot() {
 		s.y = (int16_t)lroundf(b.y);
 		bl.push_back(s);
 	}
+	std::vector<GimmickState> gs;
+	for (const ServerGimmick& g : gimmicks) {
+		GimmickState s{};
+		s.kind = g.kind;
+		s.x = (int16_t)lroundf(g.x);
+		s.y = (int16_t)lroundf(g.y);
+		s.dirX = g.dirX;
+		s.dirY = g.dirY;
+		gs.push_back(s);
+	}
 
 	// 조각 하나에 들어가는 적 수 = (1400 - 고정 부분) / 적 1마리 크기
 	const size_t fixedBytes = sizeof(S2C_SnapshotHead) + sizeof(ps) + sizeof(uint16_t);// 머리 + 플레이어 + 적 수
 	const size_t extra0 = sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint8_t);// 0번 조각만: 보스, 탄막, 기믹 수
-	const size_t perFrag0 = (MAX_UDP_SIZE - fixedBytes - extra0- bs.size() * sizeof(BossState) - bl.size() * sizeof(BulletState)) / sizeof(EnemyState);
+	const size_t perFrag0 = (MAX_UDP_SIZE - fixedBytes - extra0 - bs.size() * sizeof(BossState) - bl.size() * sizeof(BulletState) - gs.size() * sizeof(GimmickState)) / sizeof(EnemyState);
 	const size_t perFrag = (MAX_UDP_SIZE - fixedBytes) / sizeof(EnemyState);
 
 	size_t fragCount = 1;
@@ -650,7 +664,8 @@ void World::SendSnapshot() {
 			if (!bs.empty())put(bs.data(), bs.size() * sizeof(BossState));
 			uint16_t bulletCount = (uint16_t)bl.size();	put(&bulletCount, sizeof(bulletCount));
 			if (!bl.empty())put(bl.data(), bl.size() * sizeof(BulletState));
-			uint8_t gimmickCount = 0;					put(&gimmickCount, sizeof(gimmickCount));
+			uint8_t gimmickCount = (uint8_t)gs.size();	put(&gimmickCount, sizeof(gimmickCount));
+			if (!gs.empty())put(gs.data(), gs.size() * sizeof(GimmickState));
 		}
 
 		size_t room = (f == 0) ? perFrag0 : perFrag;
@@ -909,5 +924,80 @@ void World::ReapDeadBosses() {
 		b.aoeStep = 0;
 		for (ServerPlayer& p : players)
 			if (p.active && p.hp > 0)p.hp = PLAYER_MAX_HP;// 원작: 보스를 잡으면 HP 회복
+	}
+}
+
+void World::CheckGimmick() {
+	if (!gimmicksEnabled || startInfo->mapId != GIMMICK_MAP_ID)return;
+	if (nowMs - lastCDSpawnMs >= CD_SPAWN_MS) {
+		lastCDSpawnMs = nowMs;
+		SpawnGimmick(GIMMICK_CD);
+	}
+	if (nowMs - lastFanSpawnMs >= FAN_SPAWN_MS) {
+		lastFanSpawnMs = nowMs;
+		SpawnGimmick(GIMMICK_FAN);
+	}
+}
+
+void World::SpawnGimmick(uint8_t kind) {
+	if (gimmicks.size() >= MAX_GIMMICKS)return;
+	ServerGimmick g;
+	g.kind = kind;
+	g.spawnMs = nowMs;
+	switch (rng() % 4) {// 한쪽 끝에서 반대쪽으로
+	case 0:  g.x = (float)(rng() % MAP_WIDTH); g.y = 0;                 g.dirY = 1;  break;// 위 -> 아래
+	case 1:  g.x = (float)(rng() % MAP_WIDTH); g.y = (float)MAP_HEIGHT; g.dirY = -1; break;// 아래 -> 위
+	case 2:  g.x = 0;                g.y = (float)(rng() % MAP_HEIGHT); g.dirX = 1;  break;// 왼쪽 -> 오른쪽
+	default: g.x = (float)MAP_WIDTH; g.y = (float)(rng() % MAP_HEIGHT); g.dirX = -1; break;// 오른쪽 -> 왼쪽
+	}
+	gimmicks.push_back(g);
+}
+
+void World::UpdateGimmicks() {
+	const float dt = TICK_MS / 1000.0f;
+	for (size_t i = 0; i < gimmicks.size(); ) {
+		ServerGimmick& g = gimmicks[i];
+		const bool isCd = (g.kind == GIMMICK_CD);
+		const float speed = isCd ? CD_SPEED : FAN_MOVE_SPEED;
+		g.x += g.dirX * speed * dt;
+		g.y += g.dirY * speed * dt;
+
+		const float margin = isCd ? CD_OUT_MARGIN : FAN_OUT_MARGIN;
+		bool remove = g.x < -margin || g.x > MAP_WIDTH + margin || g.y < -margin || g.y > MAP_HEIGHT + margin;
+		if (!isCd && nowMs - g.spawnMs >= FAN_DURATION_MS)remove = true;
+
+		if (!remove && isCd) {// CD: 처음 닿은 플레이어 1명에게 피해를 주고 사라진다
+			for (ServerPlayer& p : players) {
+				if (!p.active || p.hp <= 0 || p.choosing)continue;
+				const float dx = p.x - g.x, dy = p.y - g.y;
+				if (dx * dx + dy * dy <= CD_RADIUS * CD_RADIUS) {
+					p.hp -= CD_DAMAGE;
+					if (p.hp < 0)p.hp = 0;
+					remove = true;
+					break;
+				}
+			}
+		}
+		else if (!remove) {// 바람: 범위 안의 플레이어와 적을 바람 방향으로 민다
+			auto inWind = [&](float x, float y) {
+				const float along = (g.dirX != 0) ? fabsf(x - g.x) : fabsf(y - g.y);
+				const float across = (g.dirX != 0) ? fabsf(y - g.y) : fabsf(x - g.x);
+				return along <= FAN_HALF_LENGTH && across <= FAN_HALF_WIDTH;
+				};
+			auto push = [&](float& x, float& y) {
+				x = std::clamp(x + g.dirX * FAN_PUSH_SPEED * dt, 0.0f, (float)MAP_WIDTH);
+				y = std::clamp(y + g.dirY * FAN_PUSH_SPEED * dt, 0.0f, (float)MAP_HEIGHT);
+				};
+			for (ServerPlayer& p : players)
+				if (p.active && p.hp > 0 && inWind(p.x, p.y))push(p.x, p.y);
+			for (ServerEnemy& e : enemies)
+				if (inWind(e.x, e.y))push(e.x, e.y);
+		}
+
+		if (remove) {
+			gimmicks[i] = gimmicks.back();
+			gimmicks.pop_back();
+		}
+		else ++i;
 	}
 }
