@@ -513,8 +513,6 @@ void DrawWeaponSelectionUI(HDC hdc) {
 		CLEARTYPE_QUALITY, VARIABLE_PITCH, TEXT("Segoe UI"));
 	HFONT oldFont = (HFONT)SelectObject(hdc, hFont);
 
-	Graphics graphics(hdc);
-
 	for (int i = 0; i < 3; ++i) {
 		POINT origin = GetWeaponCardOrigin(i);
 		int x = origin.x;
@@ -541,6 +539,7 @@ void DrawWeaponSelectionUI(HDC hdc) {
 		// === 이미지 출력 ===
 		Image* weaponImg = weaponImages[weaponChoices[i]];
 		if (weaponImg) {
+			Graphics graphics(hdc);
 			graphics.DrawImage(weaponImg, imgX, imgY, imgSize, imgSize);
 		}
 
@@ -1082,6 +1081,38 @@ float CalcAimAngle() {
 	int screenPlayerX = playerPos.x - cameraX;
 	int screenPlayerY = playerPos.y - cameraY;
 	return atan2f((float)(mousePos.y - screenPlayerY), (float)(mousePos.x - screenPlayerX));
+}
+
+void DrawWeaponEffects(Graphics& g, int sx, int sy, float angle, unsigned int activeBits) {
+	if (activeBits & (1u << WEAPON_SLOW)) {		// 홈매트: 플레이어 중심 원
+		slowGif.Draw(g, (int)(sx - SLOW_RADIUS), (int)(sy - SLOW_RADIUS),
+			(int)(SLOW_RADIUS * 2), (int)(SLOW_RADIUS * 2));
+	}
+	if (activeBits & (1u << WEAPON_CIRCLE)) {	// 전기장: 플레이어 중심 원
+		circleGif.Draw(g, (int)(sx - CIRCLE_RADIUS), (int)(sy - CIRCLE_RADIUS),
+			(int)(CIRCLE_RADIUS * 2), (int)(CIRCLE_RADIUS * 2));
+	}
+	if (activeBits & (1u << WEAPON_BREATH)) {	// 에프킬라: 조준 방향 앞쪽
+		breathGif.Draw(g,
+			(int)(sx + cosf(angle) * slashOffset - BREATH_RADIUS / 2),
+			(int)(sy + sinf(angle) * slashOffset - BREATH_RADIUS / 2),
+			(int)BREATH_RADIUS, (int)BREATH_RADIUS, angle);
+	}
+	if (activeBits & (1u << WEAPON_SLASH)) {	// 파리채: 조준 방향 앞쪽
+		slashGif.Draw(g,
+			(int)(sx + cosf(angle) * slashOffset - WEAPON_WIDTH / 2),
+			(int)(sy + sinf(angle) * slashOffset - WEAPON_HEIGHT / 2),
+			WEAPON_WIDTH, WEAPON_HEIGHT, angle);
+	}
+}
+
+
+// 서버가 보낸 누적 킬 수를 "지금 레벨에서 잡은 수"로 바꾼다 (경험치 바용)
+int CalcLevelKills(int level, int totalKills) {
+	int kills = totalKills - 5 * level * (level - 1) / 2;
+	if (kills < 0) kills = 0;
+	if (kills > level * 5) kills = level * 5;	// 카드 선택 대기 중이거나 만렙이면 바를 꽉 채운다
+	return kills;
 }
 
 void SendNetInput(HWND hwnd) {
@@ -1910,6 +1941,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		break;
 
 
+	case WM_NET_LEVEL_UP:	// 서버가 고른 무기 후보 3개로 카드 화면을 연다
+		for (int i = 0; i < 3; ++i)
+			weaponChoices[i] = (int)((wParam >> (8 * i)) & 0xFF);
+		selectedWeapon = -1;
+		isChoosingWeapon = true;
+		InvalidateRect(hwnd, NULL, FALSE);
+		break;
+
 	case WM_NET_DISCONNECTED:
 		g_net.Close();
 		g_udp.Stop();
@@ -1917,6 +1956,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		g_myId = -1;
 		g_mapSent = false;
 		g_selectedMap = -1;
+		isChoosingWeapon = false;
 		enemies.clear();	
 		KillTimer(hwnd, TIMER_NET_INPUT);
 		KillTimer(hwnd, TIMER_NET_RENDER);
@@ -1958,7 +1998,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			int x = mp.x;
 			int y = mp.y;
 
-			if (x >= 100 && x <= 400) {
+			if (x >= 100 && x <= 700) {
 				int mapId = -1;
 				if (y >= 150 && y <= 300) mapId = 0;		// 격자 맵
 				else if (y >= 340 && y <= 490) mapId = 1;	// 기믹 맵
@@ -1981,59 +2021,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				RECT r = GetWeaponCardRect(i);  // 화면에 그려진 카드 전체 영역
 
 				if (mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom) {
-					selectedWeapon = i;
-					int type = weaponChoices[i];
-
-					// 무기 데미지 강화 or 활성화 처리
-					switch (type) {
-					case WEAPON_SLASH:
-						// 강화: 쿨타임 감소 또는 데미지 증가
-						weapons[WEAPON_SLASH].damage += 2;
-						break;
-
-					case WEAPON_BREATH:
-						if (!isBreathEnabled) {
-							SetTimer(hwnd, 13, 100, (TIMERPROC)TimerProc);  // 브레스 무기 충돌 체크 (0.1초마다)
-							weapons[WEAPON_BREATH].damage = 5;
-							isBreathEnabled = true;
-						}
-						else {
-							weapons[WEAPON_BREATH].damage++;
-						}
-						break;
-
-					case WEAPON_CIRCLE:
-						if (!isCircleEnabled) {
-							SetTimer(hwnd, 12, 100, (TIMERPROC)TimerProc); // circle 타이머
-							weapons[WEAPON_CIRCLE].active = true;
-							isCircleEnabled = true;
-						}
-						else {
-							weapons[WEAPON_CIRCLE].damage++;
-						}
-						break;
-
-					case WEAPON_SLOW:
-						if (!isSlowEnabled) {
-							SetTimer(hwnd, 14, 16, (TIMERPROC)TimerProc);  // 슬로우 무기 주기 (0.1초 간격)
-							weapons[WEAPON_SLOW].active = true;
-							isSlowEnabled = true;
-						}
-						break;
-
-					case WEAPON_COUNT:  // Homing Weapon
-						if (!isHomingEnabled) {
-							SetTimer(hwnd, 15, 16, (TIMERPROC)TimerProc);  // 스나이퍼 무기 약 60FPS
-							homingWeapon.damage = 10;
-							isHomingEnabled = true;
-						}
-						else {
-							homingWeapon.damage++;
-						}
-						break;
-					}
+					// 무기 강화는 서버가 한다. 클라는 몇 번째 카드를 골랐는지만 보낸다
+					g_net.SendSelectWeapon((uint8_t)i);
 					isChoosingWeapon = false;
 					selectedWeapon = -1;
+					InvalidateRect(hwnd, NULL, FALSE);
 					break;
 				}
 			}
@@ -2096,6 +2088,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			playerPos.y = netPlayers[g_myId].y;
 			playerHP = (std::max)(netPlayers[g_myId].hp, 0);	// 음수면 체력 바가 거꾸로 그려지므로 0으로
 			UpdateCamera();
+			// 레벨·경험치: 원작의 레벨 텍스트와 경험치 바(DrawExpBar)가 읽는 전역을 스냅샷 값으로 바꾼다
+			playerLevel = netPlayers[g_myId].level;
+			killCount = CalcLevelKills(netPlayers[g_myId].level, netPlayers[g_myId].killCount);
 
 			// 적: 원작 그리기 코드가 읽는 전역 enemies를 스냅샷 값으로 바꾼다
 			enemies.clear();
@@ -2152,49 +2147,33 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		int screenX = playerPos.x - offsetX;
 		int screenY = playerPos.y - offsetY;
 
-		// === 무기 그리기 (GIF) ===
-		for (int i = 0; i < WEAPON_COUNT; ++i) {
-			Weapon& w = weapons[i];
-			if (!w.active) continue;
-			Graphics graphics(memDC);
+				// === 무기 그리기 (GIF) ===
+		// 서버 스냅샷의 무기 비트와 조준 각도로 나와 상대의 무기 이펙트를 그린다
+		if (hasNet) {
+			// GIF 프레임은 한 화면에 한 번만 넘긴다
+			slowGif.NextFrame();
+			circleGif.NextFrame();
+			breathGif.NextFrame();
+			slashGif.NextFrame();
 
-			if (w.type == WEAPON_SLASH) {
-				slashGif.NextFrame();
-				slashGif.Draw(graphics,
-					(int)(screenX + cosf(weaponAngle) * slashOffset - WEAPON_WIDTH / 2),
-					(int)(screenY + sinf(weaponAngle) * slashOffset - WEAPON_HEIGHT / 2),
-					WEAPON_WIDTH, WEAPON_HEIGHT, weaponAngle);
-			}
-			else if (w.type == WEAPON_CIRCLE) {
-				circleGif.NextFrame();
-				circleGif.Draw(graphics,
-					(int)(playerPos.x - CIRCLE_RADIUS - cameraX),
-					(int)(playerPos.y - CIRCLE_RADIUS - cameraY),
-					(int)(CIRCLE_RADIUS * 2), (int)(CIRCLE_RADIUS * 2));
-			}
-			else if (w.type == WEAPON_BREATH) {
-				breathGif.NextFrame();
-				// 브레스는 플레이어 앞쪽에 출력
-				breathGif.Draw(graphics,
-					(int)(screenX + cosf(weaponAngle) * slashOffset - BREATH_RADIUS / 2),
-					(int)(screenY + sinf(weaponAngle) * slashOffset - BREATH_RADIUS / 2),
-					BREATH_RADIUS, BREATH_RADIUS, weaponAngle);
-			}
-			else if (w.type == WEAPON_SLOW) {
-				slowGif.NextFrame();
-				slowGif.Draw(graphics,
-					(int)(playerPos.x - SLOW_RADIUS - cameraX),
-					(int)(playerPos.y - SLOW_RADIUS - cameraY),
-					(int)(SLOW_RADIUS * 2), (int)(SLOW_RADIUS * 2));
+			Graphics graphics(memDC);
+			for (int i = 0; i < NET_MAX_PLAYERS; ++i) {
+				const NetPlayerView& p = netPlayers[i];
+				if (p.hp <= 0) continue;	// 죽었거나 나간 플레이어는 이펙트도 그리지 않는다
+				DrawWeaponEffects(graphics, p.x - cameraX, p.y - cameraY, p.aimAngle, p.weaponActiveBits);
 			}
 		}
-		if (homingWeapon.active) {
-			int x = (int)(homingWeapon.x - cameraX);
-			int y = (int)(homingWeapon.y - cameraY);
-
+		// 소금총 탄: 서버가 보낸 탄 위치에 나와 상대의 탄을 보라색 원으로 그린다
+		if (hasNet) {
 			HBRUSH hBrush = CreateSolidBrush(RGB(255, 0, 255));  // 보라색
 			HBRUSH oldBrush = (HBRUSH)SelectObject(memDC, hBrush);
-			Ellipse(memDC, x - 10, y - 10, x + 10, y + 10);
+			for (int i = 0; i < NET_MAX_PLAYERS; ++i) {
+				const NetPlayerView& p = netPlayers[i];
+				if (!p.homingActive) continue;	// 죽음·접속 끊김·카드 선택 중이면 서버가 꺼서 보낸다
+				int x = p.homingX - cameraX;
+				int y = p.homingY - cameraY;
+				Ellipse(memDC, x - 10, y - 10, x + 10, y + 10);
+			}
 			SelectObject(memDC, oldBrush);
 			DeleteObject(hBrush);
 		}
