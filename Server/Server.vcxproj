@@ -154,6 +154,7 @@
     <ClInclude Include="BossDef.h" />
     <ClInclude Include="EventQueue.h" />
     <ClInclude Include="Events.h" />
+    <ClInclude Include="GimmickDef.h" />
     <ClInclude Include="Server.h" />
     <ClInclude Include="Session.h" />
     <ClInclude Include="UdpEndpoint.h" />

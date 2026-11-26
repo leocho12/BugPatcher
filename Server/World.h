@@ -8,6 +8,7 @@
 #include "Events.h"
 #include "WeaponDef.h"
 #include "BossDef.h"
+#include "GimmickDef.h"
 struct C2S_Input;
 struct C2S_SelectWeapon;
 
@@ -71,7 +72,7 @@ struct ServerBoss {
 	int64_t aoeTickMs = 0;// 마지막으로 AOE 단계가 바뀐 게임 시간
 };
 struct ServerBullet { float x, y, vx, vy; };
-
+struct ServerGimmick { uint8_t kind = GIMMICK_CD; float x = 0, y = 0; int8_t dirX = 0, dirY = 0; uint64_t spawnMs = 0; };
 class World {
 public:
 	void Init(EventQueue<RecvEvent>* recvQ, EventQueue<SendEvent>* sendQ,
@@ -93,10 +94,9 @@ public:
 	void BroadcastBossAlert(uint8_t bossType);// 보스 등장을 두 클라에 알림
 	void Stop(){ running = false; }// 서버 종료시 메인이 호출
 
-	// 무기 처리를 Update에 연결할지 여부. 11/20 2단계 확인(적) 이후에 true로 바꾼다.
-	// 꺼져 있으면 무기가 적을 죽이지 않아, 무기 이펙트가 아직 없는 클라 화면에서 적이 이유 없이 사라지지 않는다
 	bool weaponsEnabled = true;
 	bool bossesEnabled = false;
+	bool gimmicksEnabled = false;
 private:
 	EventQueue<RecvEvent>* recvQ = nullptr;		
 	EventQueue<SendEvent>* sendQ = nullptr;		
@@ -129,11 +129,17 @@ private:
 	void ReapDeadBosses();// HP 0 이하 보스 처리 + 생존 플레이어 HP 회복
 	void AddBullet(float x, float y, float vx, float vy);
 	void FireRing(const ServerBoss& b, float speed);// 8방향 탄막
+	void CheckGimmick();// 기믹 생성 판단
+	void SpawnGimmick(uint8_t kind);// 기믹 생성
+	void UpdateGimmicks();// 기믹 이동, 플레이어 충돌
 
 	std::vector<ServerEnemy> enemies;
 	uint16_t nextEnemyId = 1;
 	ServerBoss bosses[3];
 	std::vector<ServerBullet> bullets;
+	std::vector<ServerGimmick>gimmicks;
+	uint64_t lastCDSpawnMs = 0;// 마지막으로 CD를 만든 게임 시간
+	uint64_t lastFanSpawnMs = 0;// 마지막으로 FAN을 만든 게임 시간
 	uint64_t lastSpawnMs = 0;// 마지막으로 적을 만든 게임 시간
 	uint64_t lastContactMs = 0;// 마지막 접촉 판정 게임 시간
 	std::mt19937 rng{ std::random_device{}() };// 월드 스레드만 사용
