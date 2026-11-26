@@ -710,7 +710,7 @@ void World::OnKill(int pid) {
 	ServerPlayer& p = players[pid];
 	if (!p.active)return;
 	if (p.level + p.pendingLevelUps >= MAX_LEVEL)return;//이미 만렙이거나 만렙 예정
-	if (++p.levelKills >= p.level * 5) {
+	if (++p.levelKills >= (p.level+p.pendingLevelUps) * 5) {
 		p.levelKills = 0;
 		++p.pendingLevelUps;
 		TryStartLevelUp(pid);
