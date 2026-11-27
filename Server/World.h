@@ -92,6 +92,7 @@ public:
 	void SendSnapshot();// 현재 상태를 S2C_SNAPSHOT으로 만들어 송신 큐에 넣음
 	void BroadcastGameStart();// 시작 위치를 정한 뒤 S2C_GAME_START를 두 클라에 보냄
 	void BroadcastBossAlert(uint8_t bossType);// 보스 등장을 두 클라에 알림
+	void BroadcastGameResult(uint8_t result);// 게임 결과(클리어 / 게임 오버)를 두 클라에 알림
 	void Stop(){ running = false; }// 서버 종료시 메인이 호출
 
 	bool weaponsEnabled = true;
@@ -132,6 +133,7 @@ private:
 	void CheckGimmick();// 기믹 생성 판단
 	void SpawnGimmick(uint8_t kind);// 기믹 생성
 	void UpdateGimmicks();// 기믹 이동, 플레이어 충돌
+	void CheckGameResult();// 보스3 처치면 클리어, 살아 있는 플레이어가 없으면 게임 오버
 
 	std::vector<ServerEnemy> enemies;
 	uint16_t nextEnemyId = 1;
@@ -140,6 +142,7 @@ private:
 	std::vector<ServerGimmick>gimmicks;
 	uint64_t lastCDSpawnMs = 0;// 마지막으로 CD를 만든 게임 시간
 	uint64_t lastFanSpawnMs = 0;// 마지막으로 FAN을 만든 게임 시간
+	bool finished = false;// 결과가 나면 true. 이후에는 시뮬레이션을 멈춘다
 	uint64_t lastSpawnMs = 0;// 마지막으로 적을 만든 게임 시간
 	uint64_t lastContactMs = 0;// 마지막 접촉 판정 게임 시간
 	std::mt19937 rng{ std::random_device{}() };// 월드 스레드만 사용

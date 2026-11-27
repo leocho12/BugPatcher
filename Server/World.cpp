@@ -139,6 +139,7 @@ void World::SpawnPlayer() {
 	nextEnemyId = 1;
 	lastSpawnMs = nowMs;
 	lastContactMs = nowMs;
+	finished = false;
 }
 
 void World::UpdatePlayers() {
@@ -561,6 +562,7 @@ BroadcastGameStart();// 시작 위치를 정한 직후에 클라에 알림
 }
 
 void World::Update(uint32_t dtMs) {
+	if (finished)return;
 	nowMs += dtMs;
 	++tick;
 	UpdatePlayers();
@@ -574,6 +576,7 @@ void World::Update(uint32_t dtMs) {
 	CheckGimmick();
 	UpdateGimmicks();
 	UpdateContactDamage();
+	CheckGameResult();
 	SendSnapshot();
 }
 
@@ -723,7 +726,7 @@ void World::ProcessRecvEvents() {
 
 void World::OnKill(int pid) {
 	ServerPlayer& p = players[pid];
-	if (!p.active)return;
+	if (!p.active || p.hp <= 0)return;// 죽은 플레이어는 레벨업하지 않도록
 	if (p.level + p.pendingLevelUps >= MAX_LEVEL)return;//이미 만렙이거나 만렙 예정
 	if (++p.levelKills >= (p.level+p.pendingLevelUps) * 5) {
 		p.levelKills = 0;
@@ -1000,4 +1003,24 @@ void World::UpdateGimmicks() {
 		}
 		else ++i;
 	}
+}
+
+void World::BroadcastGameResult(uint8_t result) {
+	S2C_GameResult pkt{};
+	InitPacket(pkt, S2C_GAME_RESULT);
+	pkt.result = result;
+	sendQ->Push(SendEvent{ TARGET_ALL, false, ToBytes(pkt) });
+}
+
+void World::CheckGameResult() {
+	if (finished)return;
+	if (bosses[BOSS_DASH_AND_BULLET - 1].killed) {// 보스3을 잡으면 클리어 (같은 틱에 전멸해도 클리어 우선)
+		finished = true;
+		BroadcastGameResult(RESULT_CLEAR);
+		return;
+	}
+	for (const ServerPlayer& p : players)
+		if (p.active && p.hp > 0)return;// 한 명이라도 살아 있으면 계속 (죽은 쪽은 관전)
+	finished = true;
+	BroadcastGameResult(RESULT_GAMEOVER);
 }
